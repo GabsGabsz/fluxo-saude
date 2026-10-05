@@ -7,7 +7,7 @@ Baseline: **ERS v1.1 (revisão técnica)**. Legenda: ✅ implementado e testado 
 
 | ID | Pri. | Status | Onde | Teste |
 |---|---|---|---|---|
-| RF-001 Autenticação e perfil | M | 🟡 | `usuario`, `lotacao`, funções de login (V6), `SegurancaConfig` (nega tudo), ADR-0002 | `t02` |
+| RF-001 Autenticação e perfil | M | ✅ | módulo `identidade` (login, sessão, troca de senha, unidade ativa), `MatrizPermissoes`, V6–V8, ADR-0002 | `ServicoAutenticacaoTest`, `MatrizPermissoesTest`, `t05`, `SessaoIT` |
 | RF-002 Abrir episódio | M | ✅ | `Episodio.abrir`, `fluxo.episodio` | `EpisodioTest`, `t03` |
 | RF-003 Detectar duplicidade **sem bloquear** (v1.1) | M | ✅ | justificativa obrigatória + evento `DUPLICIDADE_JUSTIFICADA`; banco serializa aberturas do mesmo paciente | `RegrasV11Test`, `t03` |
 | RF-004 Alterar etapa com autor e hora | M | ✅ | `mudarEtapa`, `transicao_etapa`, trigger `episodio_regras` | ambos |
@@ -55,11 +55,11 @@ Baseline: **ERS v1.1 (revisão técnica)**. Legenda: ✅ implementado e testado 
 
 | RNF | Status |
 |---|---|
-| RNF-013 Credenciais (hash, MFA, sem compartilhamento) | 🟡 Argon2id definido; MFA previsto no ADR-0002 (⬜) |
+| RNF-013 Credenciais (hash, MFA, sem compartilhamento) | 🟡 Argon2id + política NIST + bloqueio progressivo + limite de sessões ✅; MFA ⬜ |
 | RNF-014 Concorrência | ✅ `tg_versao` |
 | RNF-015 Privacidade visual | 🟡 `Pseudonimo`; tela ⬜ |
 | RNF-016 Acessibilidade (eMAG/WCAG) | ⬜ front-end |
-| RNF-017 Horário do servidor; ajuste manual restrito e auditado | ✅ banco define `registrado_em`; ajuste exige marcação + justificativa no evento, limitado pela unidade. Restrição por perfil ⬜ |
+| RNF-017 Horário do servidor; ajuste manual restrito e auditado | ✅ banco define `registrado_em`; ajuste exige marcação + justificativa no evento, limitado pela unidade; permissão `HORARIO_AJUSTAR` (aplicação nos casos de uso ⬜) |
 | RNF-018 Contingência | 🟡 ajuste manual justificado + janela ampliável por unidade; procedimento documentado ⬜ |
 
 ## Critérios de aceite (ERS §18)
@@ -67,7 +67,7 @@ Baseline: **ERS v1.1 (revisão técnica)**. Legenda: ✅ implementado e testado 
 | CA | Status |
 |---|---|
 | CA-01, 02, 03, 04, 08, 10, 12 | ✅ no domínio/banco (telas ⬜) |
-| CA-11 | 🟡 RLS por unidade ✅; autorização por perfil ⬜ |
+| CA-11 | ✅ RLS por unidade + permissões por perfil na unidade ativa + revalidação no banco a cada transação (aplicação nas telas ⬜) |
 | CA-05, 06, 07, 09 | ⬜ |
 
 ## Anexo B.3 — decisões que o desenvolvedor não deve tomar sozinho

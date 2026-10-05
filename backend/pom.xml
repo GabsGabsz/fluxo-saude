@@ -19,6 +19,7 @@
 
     <properties>
         <java.version>21</java.version>
+        <bouncycastle.version>1.85</bouncycastle.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     </properties>
 
@@ -35,6 +36,17 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+        <!-- Sessão no servidor, persistida no PostgreSQL (ADR-0002) -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-session-jdbc</artifactId>
+        </dependency>
+        <!-- Argon2id do Spring Security requer BouncyCastle (dependência opcional dele) -->
+        <dependency>
+            <groupId>org.bouncycastle</groupId>
+            <artifactId>bcpkix-jdk18on</artifactId>
+            <version>${bouncycastle.version}</version>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -86,11 +98,13 @@
                 <artifactId>maven-compiler-plugin</artifactId>
                 <configuration>
                     <release>${java.version}</release>
+                    <!-- Avisos sempre visíveis. O núcleo puro (domínio/aplicação) é verificado com
+                         -Werror no CI à parte; aqui não, para que depreciações de APIs de
+                         terceiros não quebrem o build sem aviso prévio. -->
                     <compilerArgs>
                         <arg>-Xlint:all</arg>
                         <arg>-Xlint:-processing</arg>
                         <arg>-Xlint:-serial</arg>
-                        <arg>-Werror</arg>
                         <arg>-parameters</arg>
                     </compilerArgs>
                 </configuration>

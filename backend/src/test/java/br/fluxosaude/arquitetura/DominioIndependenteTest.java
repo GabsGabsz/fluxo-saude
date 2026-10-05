@@ -28,7 +28,8 @@ class DominioIndependenteTest {
         List<Path> dominios;
         try (Stream<Path> s = Files.walk(raiz)) {
             dominios = s.filter(p -> p.toString().endsWith(".java"))
-                    .filter(p -> p.toString().contains("dominio") || p.toString().contains("compartilhado"))
+                    .filter(p -> p.toString().contains("dominio") || p.toString().contains("compartilhado")
+                            || p.toString().contains("aplicacao"))
                     .collect(Collectors.toList());
         }
         assertTrue(!dominios.isEmpty(), "nenhum arquivo de domínio encontrado em " + raiz.toAbsolutePath());

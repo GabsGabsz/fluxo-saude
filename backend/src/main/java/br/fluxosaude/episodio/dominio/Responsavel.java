@@ -1,5 +1,6 @@
 package br.fluxosaude.episodio.dominio;
 
+import br.fluxosaude.identidade.dominio.Papel;
 import java.util.Objects;
 import java.util.UUID;
 

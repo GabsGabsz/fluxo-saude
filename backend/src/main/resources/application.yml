@@ -2,6 +2,12 @@
 spring:
   application:
     name: fluxo-saude
+  session:
+    # Sessão no servidor (ADR-0002): expira após 30 min sem uso; validade absoluta em fluxo.seguranca.
+    timeout: 30m
+    jdbc:
+      table-name: sessao.SPRING_SESSION
+      initialize-schema: never      # esquema criado pela migração V7 (papel da aplicação não tem DDL)
   datasource:
     # Aplicação conecta com o papel SEM privilégios de DDL e sujeito a RLS.
     url: ${FLUXO_DB_URL:jdbc:postgresql://localhost:5432/fluxo}
@@ -27,16 +33,24 @@ spring:
       app_role: ${FLUXO_DB_APP_USER:fluxo_app}
 
 server:
+  # Atrás de proxy reverso (TLS no proxy), habilite SOMENTE com o IP do proxy declarado,
+  # senão o IP de origem (limites e auditoria) seria forjável pelo cliente:
+  #   forward-headers-strategy: native
+  #   tomcat.remoteip.internal-proxies: 10\\.0\\.0\\.10
   error:
     include-message: never
     include-stacktrace: never
     include-exception: false
   servlet:
     session:
+      timeout: 30m
       cookie:
+        # Prefixo __Host-: o navegador exige Secure, Path=/ e proíbe Domain (sem vazamento a subdomínios).
+        name: __Host-FLUXO
         http-only: true
         secure: true
         same-site: strict
+        path: /
 
 management:
   endpoints:
@@ -46,3 +60,16 @@ management:
   endpoint:
     health:
       show-details: never
+
+fluxo:
+  seguranca:
+    max-falhas-por-origem: 30
+    max-falhas-por-origem-e-login: 5
+    janela-tentativas: 5m
+    max-falhas-troca-senha: 5
+    janela-troca-senha: 15m
+    max-falhas-conta: 5
+    bloqueio-conta: 5m
+    max-sessoes-por-usuario: 2
+    duracao-absoluta-sessao: 12h
+    max-hashes-simultaneos: 4

@@ -1,4 +1,4 @@
-package br.fluxosaude.episodio.dominio;
+package br.fluxosaude.identidade.dominio;
 
 /** Perfis de acesso da ERS §3 (espelha fluxo.papel). */
 public enum Papel {

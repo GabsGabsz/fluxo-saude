@@ -42,6 +42,11 @@ CREATE FUNCTION teste.etapa(p_unidade uuid, p_codigo text) RETURNS uuid
 CREATE FUNCTION teste.motivo(p_unidade uuid, p_codigo text) RETURNS uuid
     LANGUAGE sql STABLE AS $$ SELECT id FROM fluxo.motivo_bloqueio WHERE unidade_id = p_unidade AND codigo = p_codigo $$;
 
+-- Leitura irrestrita da auditoria, só para asserções (registros sem unidade ficam fora do RLS).
+CREATE FUNCTION teste.auditoria_desde(p_id bigint) RETURNS SETOF auditoria.registro
+    LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog AS $$
+    SELECT * FROM auditoria.registro WHERE id > p_id ORDER BY id $$;
+
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA teste TO fluxo_app;
 
 INSERT INTO fluxo.unidade (id, codigo, nome, tipo) VALUES
