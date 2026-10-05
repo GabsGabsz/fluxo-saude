@@ -1,0 +1,22 @@
+# Ambiente de DESENVOLVIMENTO local. Copie .env.example para .env e defina senhas.
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina no .env}
+      FLUXO_OWNER_PASSWORD: ${FLUXO_DB_OWNER_PASSWORD:?defina no .env}
+      FLUXO_APP_PASSWORD: ${FLUXO_DB_APP_PASSWORD:?defina no .env}
+    ports:
+      - "127.0.0.1:5432:5432"   # só localhost
+    volumes:
+      - ./infra/db/init:/docker-entrypoint-initdb.d:ro
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d fluxo"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  pgdata:

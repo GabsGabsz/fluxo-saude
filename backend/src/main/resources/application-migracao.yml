@@ -1,0 +1,7 @@
+# Perfil do JOB de migração (executa o Flyway com o papel dono e encerra).
+#   FLUXO_DB_OWNER_PASSWORD=... java -jar app.jar --spring.profiles.active=migracao
+spring:
+  main:
+    web-application-type: none
+  flyway:
+    enabled: true

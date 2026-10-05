@@ -1,0 +1,18 @@
+package br.fluxosaude.episodio.dominio;
+
+/** Tipos de evento da linha do tempo (RF-014). */
+public enum TipoEvento {
+    EPISODIO_ABERTO,
+    ETAPA_ALTERADA,
+    BLOQUEIO_DEFINIDO,
+    BLOQUEIO_REMOVIDO,
+    PROTOCOLO_REGISTRADO,
+    DESTINO_DEFINIDO,
+    SETOR_ALTERADO,
+    PENDENCIA_CRIADA,
+    PENDENCIA_ATUALIZADA,
+    PENDENCIA_ENCERRADA,
+    OBSERVACAO_REGISTRADA,
+    EPISODIO_ENCERRADO,
+    CORRECAO
+}

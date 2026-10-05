@@ -1,0 +1,48 @@
+# Configuração base. Segredos SEMPRE por variável de ambiente (nunca no repositório).
+spring:
+  application:
+    name: fluxo-saude
+  datasource:
+    # Aplicação conecta com o papel SEM privilégios de DDL e sujeito a RLS.
+    url: ${FLUXO_DB_URL:jdbc:postgresql://localhost:5432/fluxo}
+    username: ${FLUXO_DB_APP_USER:fluxo_app}
+    password: ${FLUXO_DB_APP_PASSWORD:}
+    hikari:
+      maximum-pool-size: ${FLUXO_DB_POOL:20}
+      transaction-isolation: TRANSACTION_READ_COMMITTED   # exigido pela cadeia de auditoria (ADR-0003)
+      connection-timeout: 5000
+  flyway:
+    # Migrações NÃO rodam no processo da aplicação em execução: a credencial do
+    # papel DONO só existe no job de migração (perfil "migracao"). Assim, uma falha
+    # na aplicação não expõe credencial capaz de DDL ou de contornar o RLS.
+    enabled: false
+    url: ${FLUXO_DB_URL:jdbc:postgresql://localhost:5432/fluxo}
+    user: ${FLUXO_DB_OWNER_USER:fluxo_owner}
+    password: ${FLUXO_DB_OWNER_PASSWORD:}
+    schemas: fluxo,auditoria
+    create-schemas: true
+    clean-disabled: true
+    validate-on-migrate: true
+    placeholders:
+      app_role: ${FLUXO_DB_APP_USER:fluxo_app}
+
+server:
+  error:
+    include-message: never
+    include-stacktrace: never
+    include-exception: false
+  servlet:
+    session:
+      cookie:
+        http-only: true
+        secure: true
+        same-site: strict
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
