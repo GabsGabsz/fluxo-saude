@@ -10,3 +10,8 @@ updates:
   - package-ecosystem: docker-compose
     directory: /
     schedule: { interval: weekly }
+    ignore:
+      # Versão principal do PostgreSQL exige plano de migração (pg_upgrade/dump) e
+      # validação das funções/RLS — decisão deliberada, não PR automático.
+      - dependency-name: "postgres"
+        update-types: ["version-update:semver-major"]

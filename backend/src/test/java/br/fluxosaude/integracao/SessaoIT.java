@@ -16,8 +16,10 @@ import java.sql.ResultSet;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
-import org.junit.jupiter.api.BeforeAll;
+import org.flywaydb.core.Flyway;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.env.Environment;
@@ -35,8 +37,25 @@ class SessaoIT extends IntegracaoBase {
     @Autowired
     Environment env;
 
-    @BeforeAll
-    static void criarAdministrador() throws Exception {
+    /** Injetado para garantir que as migrações já rodaram (o Flyway executa na subida do contexto). */
+    @Autowired
+    Flyway flyway;
+
+    private static final AtomicBoolean PREPARADO = new AtomicBoolean();
+
+    /**
+     * Prepara os dados uma única vez, DEPOIS da subida do contexto Spring. Não pode ser
+     * {@code @BeforeAll static}: esse roda antes do contexto e, portanto, antes do Flyway criar
+     * as tabelas — foi a falha do primeiro CI quando esta classe executou antes das demais.
+     */
+    @BeforeEach
+    void prepararUmaVez() throws Exception {
+        if (PREPARADO.compareAndSet(false, true)) {
+            criarAdministrador();
+        }
+    }
+
+    private static void criarAdministrador() throws Exception {
         String hash = new HashDeSenhaArgon2(1).gerar(SENHA_INICIAL);
         try (Connection c = conexaoDono()) {
             c.setAutoCommit(false);
