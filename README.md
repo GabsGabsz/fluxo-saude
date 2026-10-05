@@ -61,11 +61,39 @@ API de sessão (JSON; CSRF via cookie `XSRF-TOKEN` → cabeçalho `X-XSRF-TOKEN`
 | PUT | `/api/sessao/senha` | troca a senha (obrigatória no 1º acesso) |
 | DELETE | `/api/sessao` | logout |
 
-Testes do banco sem Java (qualquer PostgreSQL ≥ 14, com superusuário):
+## Executando os testes
+
+Os testes Java não precisam de `.env`, de credenciais de produção ou do banco do
+`docker compose`: os testes de integração criam seu próprio PostgreSQL 16 descartável.
+
+```bash
+cd backend
+mvn -B -ntp test                 # somente os testes unitários; JDK 21 + Maven 3.9+
+mvn -B -ntp verify               # unitários + integração; também exige Docker ativo
+```
+
+`mvn test` sozinho **não valida a integração**. A validação completa exige `mvn verify`
+e os testes SQL abaixo. O Surefire executa `*Test`; o Failsafe executa `*IT` e faz o
+build falhar se houver erro. Os relatórios ficam em `backend/target/surefire-reports/`
+e `backend/target/failsafe-reports/`.
+
+No GitHub, o workflow **CI** executa ambos os jobs em cada push na `main` e em cada
+pull request. Depois que esta configuração estiver na `main`, também é possível
+iniciar em **Actions → CI → Run workflow** e escolher a branch. O resultado só é
+aprovado quando **Build + testes (Java 21)** e **Migrações + testes SQL (PostgreSQL 16)**
+estiverem verdes. Os artefatos `testes-java` e `testes-sql` guardam os relatórios por
+14 dias, inclusive em caso de falha se os arquivos tiverem sido produzidos.
+
+Testes do banco sem Java (PostgreSQL 16 é a versão validada pelo CI, com cliente
+`psql` e superusuário em uma instância exclusiva para testes):
 
 ```bash
 PGHOST=localhost PGUSER=postgres backend/src/test/sql/run-db-tests.sh
 ```
+
+Execute esse último comando na raiz do repositório. O script cria e remove um banco
+descartável e cria os papéis `fluxo_owner` e `fluxo_app` se ainda não existirem;
+por isso, use uma instância de testes, com autenticação configurada para esses papéis.
 
 ## Estrutura
 

@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -35,7 +36,17 @@ jobs:
         env:
           PGHOST: localhost
           PGUSER: postgres
-        run: backend/src/test/sql/run-db-tests.sh
+        run: |
+          set -o pipefail
+          backend/src/test/sql/run-db-tests.sh 2>&1 | tee testes-sql.log
+      - name: Guardar relatório SQL
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: testes-sql
+          path: testes-sql.log
+          if-no-files-found: warn
+          retention-days: 14
 
   backend:
     name: Build + testes (Java 21)
@@ -48,6 +59,19 @@ jobs:
           distribution: temurin
           java-version: "21"
           cache: maven
+          cache-dependency-path: backend/pom.xml
+      - name: Verificar Docker para os testes de integração
+        run: docker info
       - name: mvn verify (unidade + integração com Testcontainers)
         working-directory: backend
         run: mvn -B -ntp verify
+      - name: Guardar relatórios JUnit
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: testes-java
+          path: |
+            backend/target/surefire-reports/
+            backend/target/failsafe-reports/
+          if-no-files-found: warn
+          retention-days: 14
