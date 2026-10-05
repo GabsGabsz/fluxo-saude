@@ -20,6 +20,10 @@ unidade**, não regras fixas (RN-014, Anexo B.3). Cada item indica a validação
 | 12 | Sessão: inatividade 30 min, absoluta 12 h, até 2 sessões simultâneas | `application.yml` | V-10 |
 | 13 | **Matriz perfil → permissões** (ERS §3): administração sem acesso nominal a casos; direção só agregado/pseudonimizado; transporte só a fila; ajuste manual de horário só coordenação e enfermagem; reconciliação só coordenação | `MatrizPermissoes` | V-06, V-08 |
 | 14 | Limites de login: 30 falhas/5 min por IP (NAT), 5 por IP+login, bloqueio de conta após 5 falhas (5 min, progressivo) | `application.yml` | V-10 |
+| 15 | **Justificativa de ajuste de horário fica no evento imutável** (até 120 caracteres), pois o RNF-017 exige que ela acompanhe o fato. É o único texto livre em `evento_episodio`; a tela deve orientar a não escrever dado clínico/pessoal. Alternativa (se o encarregado de dados exigir): tabela própria, referenciada pelo evento | `Episodio`, V5/V10 | V-08 |
+| 16 | Prazo de pendência: no máximo **30 dias** à frente | `Pendencia.PRAZO_MAXIMO` | V-05 |
+| 17 | Leitura do caso limitada a 1000 eventos, 200 pendências e 200 observações mais recentes (`historicoTruncado` sinaliza corte) | `Consultas` | V-10 |
+| 18 | Banco: espera por lock até **5 s** e consulta até **30 s** (acima disso: 409 / erro) | `application.yml` | V-10 |
 
 **Não decidido, e não deve ser decidido pelo desenvolvedor:** limites de alerta e SLA por etapa
 (V-05), níveis e destinatários de escalonamento (V-06), fórmulas oficiais dos indicadores (V-09),

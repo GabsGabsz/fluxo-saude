@@ -17,6 +17,10 @@ spring:
       maximum-pool-size: ${FLUXO_DB_POOL:20}
       transaction-isolation: TRANSACTION_READ_COMMITTED   # exigido pela cadeia de auditoria (ADR-0003)
       connection-timeout: 5000
+      # Limites por sessão do banco: espera por lock vira 409 (CannotAcquireLock) em vez de
+      # prender a requisição e o pool; consulta descontrolada é abortada.
+      data-source-properties:
+        options: "-c lock_timeout=5s -c statement_timeout=30s"
   flyway:
     # Migrações NÃO rodam no processo da aplicação em execução: a credencial do
     # papel DONO só existe no job de migração (perfil "migracao"). Assim, uma falha

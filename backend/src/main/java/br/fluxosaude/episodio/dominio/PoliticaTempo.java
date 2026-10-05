@@ -42,6 +42,12 @@ public record PoliticaTempo(Duration toleranciaFuturo, Duration retroatividadeMa
         }
     }
 
+    /** Indica se o momento seria um ajuste manual (usado para exigir a permissão HORARIO_AJUSTAR). */
+    public boolean ehAjusteManual(MomentoInformado momento, Instant agoraServidor) {
+        return momento != null
+                && Duration.between(momento.instante(), agoraServidor).compareTo(limiarAjusteManual) > 0;
+    }
+
     /**
      * Valida o momento informado contra o relógio do servidor e um piso cronológico.
      * Horário anterior ao limiar exige justificativa (ajuste manual, RNF-017).

@@ -23,6 +23,8 @@ public final class Pendencia {
 
     /** Tolerância para prazo informado "agora" (igual ao banco). */
     private static final Duration TOLERANCIA_PRAZO = Duration.ofMinutes(5);
+    /** Pendência é ação operacional de curto prazo; prazo distante indica erro de digitação. */
+    static final Duration PRAZO_MAXIMO = Duration.ofDays(30);
 
     public record ComandoCriacao(CategoriaBloqueio categoria, String descricao, Responsavel responsavel,
                                  Instant prazo, CriticidadeOperacional criticidade) {
@@ -70,13 +72,18 @@ public final class Pendencia {
         exigir(!episodio.encerrado(), "EPISODIO_ENCERRADO", "Episódio encerrado não aceita novas pendências");
         Instant agora = clock.instant();
         String descricao = Textos.obrigatorio(cmd.descricao(), "Descrição da pendência", 3, 500);
-        exigir(!cmd.prazo().isBefore(agora.minus(TOLERANCIA_PRAZO)), "PRAZO_PASSADO", "O prazo não pode estar no passado");
+        validarPrazo(cmd.prazo(), agora);
         Pendencia p = new Pendencia(ids.get(), episodio.unidadeId(), episodio.id(), cmd.categoria(), descricao,
                 cmd.responsavel(), cmd.prazo(), cmd.criticidade(), StatusPendencia.ABERTA, agora, null, 0);
         p.registrar(ids, TipoEvento.PENDENCIA_CRIADA, agora, autorId,
                 "pendencia_id", p.id.toString(), "categoria", cmd.categoria().name(),
                 "criticidade", cmd.criticidade().name(), "prazo", cmd.prazo().toString());
         return p;
+    }
+
+    private static void validarPrazo(Instant prazo, Instant agora) {
+        exigir(!prazo.isBefore(agora.minus(TOLERANCIA_PRAZO)), "PRAZO_PASSADO", "O prazo não pode estar no passado");
+        exigir(!prazo.isAfter(agora.plus(PRAZO_MAXIMO)), "PRAZO_DISTANTE", "O prazo não pode passar de 30 dias");
     }
 
     public static Pendencia reconstituir(UUID id, UUID unidadeId, UUID episodioId, CategoriaBloqueio categoria,
@@ -102,7 +109,7 @@ public final class Pendencia {
         exigirAberta();
         Objects.requireNonNull(novoPrazo);
         Instant agora = clock.instant();
-        exigir(!novoPrazo.isBefore(agora.minus(TOLERANCIA_PRAZO)), "PRAZO_PASSADO", "O prazo não pode estar no passado");
+        validarPrazo(novoPrazo, agora);
         if (novoPrazo.equals(prazo)) {
             return;
         }

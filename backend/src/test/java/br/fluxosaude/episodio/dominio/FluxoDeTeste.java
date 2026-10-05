@@ -16,20 +16,20 @@ import java.util.function.Supplier;
  * Configuração equivalente a fluxo.provisionar_unidade() (subconjunto usado nos
  * testes) + relógio controlável.
  */
-final class FluxoDeTeste {
+public final class FluxoDeTeste {
 
-    static final UUID UNIDADE = UUID.fromString("00000000-0000-0000-0000-00000000000a");
-    static final UUID SETOR = UUID.fromString("00000000-0000-0000-0000-0000000005a1");
-    static final UUID AUTOR = UUID.fromString("11111111-1111-1111-1111-000000000002");
-    static final UUID PACIENTE = UUID.fromString("22222222-0000-0000-0000-000000000020");
+    public static final UUID UNIDADE = UUID.fromString("00000000-0000-0000-0000-00000000000a");
+    public static final UUID SETOR = UUID.fromString("00000000-0000-0000-0000-0000000005a1");
+    public static final UUID AUTOR = UUID.fromString("11111111-1111-1111-1111-000000000002");
+    public static final UUID PACIENTE = UUID.fromString("22222222-0000-0000-0000-000000000020");
 
-    final Map<String, Etapa> etapas = new TreeMap<>();
-    final Map<String, MotivoBloqueio> motivos = new TreeMap<>();
-    final RelogioDeTeste relogio = new RelogioDeTeste(Instant.parse("2026-10-05T11:12:00Z")); // 08:12 em Bom Jesus
-    final Supplier<UUID> ids = new UuidV7(relogio)::proximo;
-    final FluxoConfigurado fluxo;
+    public final Map<String, Etapa> etapas = new TreeMap<>();
+    public final Map<String, MotivoBloqueio> motivos = new TreeMap<>();
+    public final RelogioDeTeste relogio = new RelogioDeTeste(Instant.parse("2026-10-05T11:12:00Z")); // 08:12 em Bom Jesus
+    public final Supplier<UUID> ids = new UuidV7(relogio)::proximo;
+    public final FluxoConfigurado fluxo;
 
-    FluxoDeTeste() {
+    public FluxoDeTeste() {
         etapa("EM_ATENDIMENTO", NaturezaEtapa.ATENDIMENTO, null, true, false, false, false, true);
         etapa("AGUARDANDO_EXAME_PARECER", NaturezaEtapa.ESPERA, null, false, true, false, false, true);
         etapa("AGUARDANDO_DECISAO", NaturezaEtapa.ESPERA, null, false, true, false, false, true);
@@ -75,15 +75,15 @@ final class FluxoDeTeste {
         fluxo = new FluxoConfigurado(UNIDADE, etapas.values(), t, motivos.values(), PoliticaTempo.PADRAO);
     }
 
-    UUID etapa(String codigo) {
+    public UUID etapa(String codigo) {
         return etapas.get(codigo).id();
     }
 
-    UUID motivo(String codigo) {
+    public UUID motivo(String codigo) {
         return motivos.get(codigo).id();
     }
 
-    Episodio abrirAgora() {
+    public Episodio abrirAgora() {
         return Episodio.abrir(new Episodio.ComandoAbertura(PACIENTE, SETOR, MomentoInformado.agora(relogio), null),
                 false, fluxo, AUTOR, relogio, ids);
     }
@@ -110,14 +110,14 @@ final class FluxoDeTeste {
     }
 
     /** Relógio mutável para simular a passagem do tempo. */
-    static final class RelogioDeTeste extends Clock {
+    public static final class RelogioDeTeste extends Clock {
         private Instant agora;
 
         RelogioDeTeste(Instant inicio) {
             this.agora = inicio;
         }
 
-        void avancar(java.time.Duration d) {
+        public void avancar(java.time.Duration d) {
             agora = agora.plus(d);
         }
 

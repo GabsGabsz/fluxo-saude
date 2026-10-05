@@ -50,6 +50,8 @@ class PendenciaTest {
     @Test
     void rejeitaPrazoNoPassadoEDescricaoVazia() {
         assertEquals("PRAZO_PASSADO", erro(() -> criar(Duration.ofHours(-1))));
+        assertEquals("PRAZO_DISTANTE", erro(() -> criar(Duration.ofDays(31))));
+        criar(Duration.ofDays(30)); // limite inclusivo
         assertEquals("CAMPO_OBRIGATORIO", erro(() -> Pendencia.criar(ep, new Pendencia.ComandoCriacao(
                 CategoriaBloqueio.LOGISTICA, "   ", new Responsavel.Perfil(Papel.TRANSPORTE),
                 t.relogio.instant().plusSeconds(60), CriticidadeOperacional.BAIXA), FluxoDeTeste.AUTOR, t.relogio, t.ids)));

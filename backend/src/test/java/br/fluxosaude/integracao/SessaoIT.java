@@ -6,18 +6,12 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import br.fluxosaude.identidade.infra.HashDeSenhaArgon2;
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
-import java.util.HashMap;
-import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.stream.Collectors;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -87,43 +81,13 @@ class SessaoIT extends IntegracaoBase {
         }
     }
 
-    /** Cliente HTTP mínimo com cookies explícitos (sem dependência de CookieManager). */
-    final class Cliente {
-        final HttpClient http = HttpClient.newHttpClient();
-        final Map<String, String> cookies = new HashMap<>();
-
-        HttpResponse<String> enviar(String metodo, String caminho, String json) throws Exception {
-            HttpRequest.Builder b = HttpRequest.newBuilder(
-                    URI.create("http://localhost:" + env.getRequiredProperty("local.server.port") + caminho));
-            if (!cookies.isEmpty()) {
-                b.header("Cookie", cookies.entrySet().stream().map(e -> e.getKey() + "=" + e.getValue())
-                        .collect(Collectors.joining("; ")));
-            }
-            String csrf = cookies.get("XSRF-TOKEN");
-            if (csrf != null) {
-                b.header("X-XSRF-TOKEN", csrf);
-            }
-            b.header("Content-Type", "application/json");
-            b.method(metodo, json == null ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofString(json));
-            HttpResponse<String> r = http.send(b.build(), HttpResponse.BodyHandlers.ofString());
-            for (String sc : r.headers().allValues("Set-Cookie")) {
-                String par = sc.split(";", 2)[0];
-                String nome = par.substring(0, par.indexOf('='));
-                String valor = par.substring(par.indexOf('=') + 1);
-                boolean expirado = sc.toLowerCase().contains("max-age=0") || valor.isEmpty();
-                if (expirado) {
-                    cookies.remove(nome);
-                } else {
-                    cookies.put(nome, valor);
-                }
-            }
-            return r;
-        }
+    private ClienteHttp novoCliente() {
+        return new ClienteHttp(Integer.parseInt(env.getRequiredProperty("local.server.port")));
     }
 
     @Test
     void fluxoCompletoDeSessao() throws Exception {
-        Cliente cliente = new Cliente();
+        ClienteHttp cliente = novoCliente();
 
         // Sem sessão: 401
         assertEquals(401, cliente.enviar("GET", "/api/sessao", null).statusCode());
@@ -132,7 +96,7 @@ class SessaoIT extends IntegracaoBase {
         HttpResponse<String> csrf = cliente.enviar("GET", "/api/sessao/csrf", null);
         assertEquals(200, csrf.statusCode());
         assertNotNull(cliente.cookies.get("XSRF-TOKEN"), "cookie XSRF-TOKEN emitido");
-        Cliente semCsrf = new Cliente();
+        ClienteHttp semCsrf = novoCliente();
         assertEquals(403, semCsrf.enviar("POST", "/api/sessao", login(SENHA_INICIAL)).statusCode());
 
         // Senha errada: 401 genérico (não revela se o login existe)
@@ -187,7 +151,7 @@ class SessaoIT extends IntegracaoBase {
         assertEquals(401, cliente.enviar("GET", "/api/sessao", null).statusCode());
 
         // A senha antiga não vale mais; a nova vale
-        Cliente outro = new Cliente();
+        ClienteHttp outro = novoCliente();
         outro.enviar("GET", "/api/sessao/csrf", null);
         assertEquals(401, outro.enviar("POST", "/api/sessao", login(SENHA_INICIAL)).statusCode());
         assertEquals(200, outro.enviar("POST", "/api/sessao", login(NOVA_SENHA)).statusCode());

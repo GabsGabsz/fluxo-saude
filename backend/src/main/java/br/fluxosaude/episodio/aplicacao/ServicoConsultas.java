@@ -1,0 +1,71 @@
+package br.fluxosaude.episodio.aplicacao;
+
+import br.fluxosaude.compartilhado.RecursoNaoEncontradoException;
+import br.fluxosaude.episodio.dominio.Pseudonimo;
+import br.fluxosaude.identidade.aplicacao.ContextoOrigem;
+import br.fluxosaude.identidade.dominio.AcessoNegadoException;
+import br.fluxosaude.identidade.dominio.Permissao;
+import br.fluxosaude.identidade.dominio.UsuarioAutenticado;
+import java.time.Instant;
+import java.util.List;
+import java.util.Objects;
+import java.util.UUID;
+
+/**
+ * Leitura para as telas (RF-010, RF-012, RF-014, RF-038). Visão nominal exige
+ * {@code EPISODIO_VER}; o painel coletivo só devolve pseudônimos ({@code PAINEL_COLETIVO_VER}).
+ * Abrir um caso nominal é auditado (RNF-002, consulta sensível).
+ */
+public final class ServicoConsultas {
+
+    public static final int LIMITE_MAXIMO = 500;
+
+    /** Linha do painel coletivo: sem nome, sem CNS (RNF-015). */
+    public record LinhaPainelPseudonimizada(String identificacao, String setor, String etapa, String natureza,
+                                            Instant entradaEm, Instant etapaDesde, String categoriaBloqueio,
+                                            Instant bloqueioDesde, int pendenciasVencidas) {
+    }
+
+    private final Transacao transacao;
+
+    public ServicoConsultas(Transacao transacao) {
+        this.transacao = Objects.requireNonNull(transacao);
+    }
+
+    public List<Consultas.LinhaTorre> torre(UsuarioAutenticado u, ContextoOrigem origem, Consultas.FiltroTorre filtro) {
+        AcessoNegadoException.exigir(u, Permissao.EPISODIO_VER);
+        Consultas.FiltroTorre f = normalizar(filtro);
+        return transacao.executar(u, origem, r -> r.consultas().torre(f));
+    }
+
+    public Consultas.Caso caso(UsuarioAutenticado u, ContextoOrigem origem, UUID episodioId) {
+        AcessoNegadoException.exigir(u, Permissao.EPISODIO_VER);
+        return transacao.executar(u, origem, r -> {
+            Consultas.Caso caso = r.consultas().caso(episodioId)
+                    .orElseThrow(() -> new RecursoNaoEncontradoException("Episódio"));
+            r.consultas().registrarConsultaDeCaso(episodioId, u.unidadeAtiva());
+            return caso;
+        });
+    }
+
+    public List<LinhaPainelPseudonimizada> painel(UsuarioAutenticado u, ContextoOrigem origem) {
+        AcessoNegadoException.exigir(u, Permissao.PAINEL_COLETIVO_VER);
+        return transacao.executar(u, origem, r -> r.consultas().painel(LIMITE_MAXIMO)).stream()
+                .map(l -> new LinhaPainelPseudonimizada(Pseudonimo.de(l.pacienteNome(), l.episodioId()), l.setorNome(),
+                        l.etapaNome(), l.natureza(), l.entradaEm(), l.etapaDesde(), l.categoriaBloqueio(),
+                        l.bloqueioDesde(), l.pendenciasVencidas()))
+                .toList();
+    }
+
+    private static Consultas.FiltroTorre normalizar(Consultas.FiltroTorre f) {
+        if (f == null) {
+            return new Consultas.FiltroTorre(null, null, null, null, null, null, null, null,
+                    Consultas.Ordem.TEMPO_NA_ETAPA, true, LIMITE_MAXIMO);
+        }
+        int limite = f.limite() <= 0 ? LIMITE_MAXIMO : Math.min(f.limite(), LIMITE_MAXIMO);
+        Integer minutos = f.minutosMinimosNaEtapa() == null ? null : Math.max(0, f.minutosMinimosNaEtapa());
+        return new Consultas.FiltroTorre(f.setorId(), f.etapaId(), f.motivoId(), f.categoriaBloqueio(),
+                f.especialidadeId(), f.responsavelUsuarioId(), minutos, f.somenteComPendenciaVencida(),
+                f.ordem() == null ? Consultas.Ordem.TEMPO_NA_ETAPA : f.ordem(), f.decrescente(), limite);
+    }
+}

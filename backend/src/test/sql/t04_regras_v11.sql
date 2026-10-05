@@ -77,9 +77,12 @@ SELECT teste.espera_erro($$
            reconciliado_em = now(), justificativa_reconciliacao = 'Mesmo paciente, cadastro duplicado'
      WHERE id = '22222222-0000-0000-0000-0000000000d2'
 $$, 'episódio ativo');
-UPDATE fluxo.episodio SET versao = versao + 1, etapa_id = teste.etapa(:A, 'CANCELADO_ENCERRADO'), etapa_desde = clock_timestamp(),
-       desfecho = 'ENCERRAMENTO_ADMINISTRATIVO', encerrado_em = clock_timestamp(),
+-- Um único instante para etapa_desde e encerrado_em (duas chamadas a clock_timestamp()
+-- podem diferir em microssegundos e o banco exige coerência entre eles).
+UPDATE fluxo.episodio SET versao = versao + 1, etapa_id = teste.etapa(:A, 'CANCELADO_ENCERRADO'), etapa_desde = t.agora,
+       desfecho = 'ENCERRAMENTO_ADMINISTRATIVO', encerrado_em = t.agora,
        justificativa_encerramento = 'Episódio aberto em cadastro duplicado'
+  FROM (SELECT clock_timestamp() AS agora) t
  WHERE id = '33333333-0000-0000-0000-0000000000d2';
 UPDATE fluxo.paciente SET versao = versao + 1, reconciliado_com_id = '22222222-0000-0000-0000-0000000000d1',
        reconciliado_em = now(), justificativa_reconciliacao = 'Mesmo paciente, cadastro duplicado'

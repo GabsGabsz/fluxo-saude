@@ -4,14 +4,15 @@ Plataforma de gestão operacional do fluxo assistencial: identifica pacientes pa
 quanto tempo aguardam, registra o gargalo atual, define a próxima ação e o responsável.
 **Não é prontuário e não substitui a regulação oficial.** Especificação: **ERS v1.1** (revisão técnica).
 
-## Estado atual — etapa 2 (identidade e sessão) sobre a fundação
+## Estado atual — etapa 3 (API de episódios, pendências e linha do tempo)
 
 | Camada | Conteúdo | Verificação |
 |---|---|---|
-| Banco (PostgreSQL 16) | Esquema do núcleo, regras críticas em `CHECK`/triggers, RLS por unidade (inclusive usuários e auditoria), auditoria imutável com cadeia SHA-256, login por funções controladas | `backend/src/test/sql` — 6 suítes + 2 testes de concorrência |
+| Banco (PostgreSQL 16) | Esquema do núcleo, regras críticas em `CHECK`/triggers, RLS por unidade (inclusive usuários e auditoria), auditoria imutável com cadeia SHA-256, login por funções controladas, observações (V9), margem de relógio (V10) | `backend/src/test/sql` — 9 suítes + 2 testes de concorrência |
 | Domínio (Java 21, sem framework) | `Episodio`, `Pendencia`, `FluxoConfigurado`, ajuste manual de horário, pseudônimo, UUIDv7 | 45 testes JUnit, incl. o cenário completo da ERS §11 |
 | Identidade (núcleo puro) | Política de senha, limitadores, matriz de permissões, serviço de autenticação | `ServicoAutenticacaoTest`, `MatrizPermissoesTest`, ... |
-| Aplicação (Spring Boot 4.1) | Login/sessão no servidor, CSRF SPA, revalidação no banco por transação, erros padronizados; migração em job separado | `SessaoIT`, `BancoDeDadosIT` (Testcontainers) |
+| Casos de uso (núcleo puro) | `ServicoEpisodios`, `ServicoPendencias`, `ServicoConsultas`: permissão na unidade ativa, versão lida (409), ajuste manual de horário, painel pseudonimizado | `ServicosDeAplicacaoTest` (portas em memória) |
+| Aplicação (Spring Boot 4.1) | Login/sessão no servidor, CSRF SPA, revalidação no banco por transação, API REST de episódios/pendências/Torre, erros padronizados; migração em job separado | `SessaoIT`, `EpisodiosIT` (cenário ERS §11 via HTTP), `BancoDeDadosIT` (Testcontainers) |
 
 Mapa requisito → código → teste: [`docs/rastreabilidade.md`](docs/rastreabilidade.md).
 Escolhas que precisam de validação com a equipe: [`docs/decisoes-a-validar.md`](docs/decisoes-a-validar.md).
@@ -61,6 +62,24 @@ API de sessão (JSON; CSRF via cookie `XSRF-TOKEN` → cabeçalho `X-XSRF-TOKEN`
 | PUT | `/api/sessao/senha` | troca a senha (obrigatória no 1º acesso) |
 | DELETE | `/api/sessao` | logout |
 
+API da Torre (exige sessão; toda alteração envia a `versao` lida e recebe a nova — versão
+desatualizada responde **409**; registro de outra unidade responde **404**). Horário opcional
+`"momento": {"ocorridoEm": "...Z", "justificativaAjuste": "..."}` — omitido = relógio do servidor;
+retroativo além do limiar da unidade exige justificativa e a permissão `HORARIO_AJUSTAR`.
+
+| Método | Caminho | Uso |
+|---|---|---|
+| GET | `/api/episodios` | Torre: `setor`, `etapa`, `motivo`, `categoria`, `especialidade`, `responsavel`, `minutosNaEtapa`, `somenteVencidas`, `ordem` (`TEMPO_TOTAL`, `TEMPO_NA_ETAPA`, `TEMPO_BLOQUEADO`, `CRITICIDADE`, `SETOR`, `ETAPA`, `MOTIVO`, `PRAZO`), `decrescente`, `limite` (≤ 500) |
+| POST | `/api/episodios` | abre episódio (`pacienteId` **ou** `novoPaciente`, `setorId`, `justificativaDuplicidade`) |
+| GET | `/api/episodios/{id}` | caso + pendências + linha do tempo + observações (consulta auditada) |
+| PUT | `/api/episodios/{id}/etapa` | muda etapa (`etapaId`, `motivoId`, `protocoloSistema/Numero`, `justificativa`); desfecho encerra |
+| PUT | `/api/episodios/{id}/motivo` · `/protocolo` · `/destino` · `/setor` | motivo do bloqueio, protocolo externo, destino, transferência interna |
+| POST | `/api/episodios/{id}/observacoes` | observação operacional (não substitui o prontuário) |
+| POST | `/api/episodios/{id}/pendencias` | cria pendência (responsável: `usuarioId` **ou** `setorId` **ou** `papel`) |
+| PATCH | `/api/pendencias/{id}` | reatribui e/ou altera o prazo |
+| POST | `/api/pendencias/{id}/resolucao` · `/cancelamento` | encerra com texto obrigatório |
+| GET | `/api/painel` | painel coletivo pseudonimizado (sem nome/CNS) |
+
 ## Executando os testes
 
 Os testes Java não precisam de `.env`, de credenciais de produção ou do banco do
@@ -102,8 +121,12 @@ backend/
   src/main/java/br/fluxosaude/
     compartilhado/        utilitários puros (UuidV7, validação de texto, erro de regra)
     episodio/dominio/     agregados e regras — SEM dependência de framework
-    configuracao/         Spring (relógio, segurança)
-  src/main/resources/db/migration/   V1..V6 (Flyway)
+    episodio/aplicacao/   casos de uso e portas (puros)
+    episodio/infra/       adaptadores JDBC (escrita e consultas da Torre)
+    episodio/web/         API REST
+    identidade/           login, sessão, permissões (mesma divisão)
+    configuracao/         Spring (relógio, segurança, montagem dos módulos)
+  src/main/resources/db/migration/   V1..V10 (Flyway)
   src/test/java/          testes de domínio, arquitetura e integração
   src/test/sql/           testes das garantias do banco
 infra/db/init/            bootstrap de papéis/banco (dev, testes e referência p/ DBA)
@@ -113,7 +136,7 @@ docs/                     ADRs, rastreabilidade, decisões a validar
 ## Próximas etapas (proposta)
 
 1. ~~Autenticação, sessão e autorização~~ (etapa 2, concluída).
-2. Casos de uso e API REST: episódio, etapas, pendências, linha do tempo (com as permissões).
+2. ~~Casos de uso e API REST: episódio, etapas, pendências, linha do tempo~~ (etapa 3, concluída).
 3. Gestão de usuários e lotações pelo administrador (encerrando sessões ao revogar).
 4. Alertas/SLA e "Pacientes travados" (M04, RF-018, RN-006).
 5. Torre de Controle e telas (front-end).

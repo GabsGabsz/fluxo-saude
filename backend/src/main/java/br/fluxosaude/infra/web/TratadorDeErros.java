@@ -1,6 +1,8 @@
 package br.fluxosaude.infra.web;
 
+import br.fluxosaude.compartilhado.ConflitoDeVersaoException;
 import br.fluxosaude.compartilhado.LimiteExcedidoException;
+import br.fluxosaude.compartilhado.RecursoNaoEncontradoException;
 import br.fluxosaude.compartilhado.RegraVioladaException;
 import br.fluxosaude.compartilhado.SobrecargaException;
 import br.fluxosaude.identidade.dominio.AcessoNegadoException;
@@ -23,6 +25,8 @@ import org.springframework.web.ErrorResponse;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.method.annotation.HandlerMethodValidationException;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 
 /**
  * Respostas de erro padronizadas (RFC 9457). Nunca expõe stack trace, SQL ou dados
@@ -72,17 +76,35 @@ public class TratadorDeErros {
         return ResponseEntity.status(r.getStatusCode()).header("Retry-After", "5").body(r.getBody());
     }
 
-    @ExceptionHandler({MethodArgumentNotValidException.class, HttpMessageNotReadableException.class})
+    /**
+     * Corpo malformado (JSON inválido, tipo errado), parâmetro de URL com tipo errado
+     * (UUID/enum inválido) ou fora dos limites: 400 genérico — nunca ecoa o valor recebido.
+     * Campos desconhecidos no corpo são ignorados (DTOs são records fechados: sem mass assignment).
+     */
+    @ExceptionHandler({MethodArgumentNotValidException.class, HttpMessageNotReadableException.class,
+            MethodArgumentTypeMismatchException.class, HandlerMethodValidationException.class})
     ResponseEntity<ProblemDetail> invalida(Exception e, HttpServletRequest req) {
         return resposta(HttpStatus.BAD_REQUEST, "REQUISICAO_INVALIDA", "Requisição inválida", req);
     }
 
-    /** RF-036: conflito de versão / escrita concorrente. */
+    /** Inexistente OU de outra unidade: mesma resposta, para não revelar existência. */
+    @ExceptionHandler(RecursoNaoEncontradoException.class)
+    ResponseEntity<ProblemDetail> naoEncontrado(RecursoNaoEncontradoException e, HttpServletRequest req) {
+        return resposta(HttpStatus.NOT_FOUND, "NAO_ENCONTRADO", e.getMessage(), req);
+    }
+
+    /** RF-036: versão lida pelo cliente está desatualizada. */
+    @ExceptionHandler(ConflitoDeVersaoException.class)
+    ResponseEntity<ProblemDetail> conflitoDeVersao(ConflitoDeVersaoException e, HttpServletRequest req) {
+        return resposta(HttpStatus.CONFLICT, "CONFLITO_DE_VERSAO", e.getMessage(), req);
+    }
+
+    /** RF-036: escrita concorrente — versão, deadlock (40P01) ou espera de lock esgotada (55P03). */
     @ExceptionHandler(ConcurrencyFailureException.class)
     ResponseEntity<ProblemDetail> concorrencia(ConcurrencyFailureException e, HttpServletRequest req) {
         LOG.info("conflito de concorrência (SQLSTATE {})", sqlState(e));
-        return resposta(HttpStatus.CONFLICT, "CONFLITO_DE_VERSAO",
-                "O registro foi alterado por outra pessoa. Recarregue e tente novamente.", req);
+        return resposta(HttpStatus.CONFLICT, "CONFLITO_CONCORRENTE",
+                "O registro está sendo alterado por outra pessoa. Recarregue e tente novamente.", req);
     }
 
     /** Regra recusada pelo banco (última linha de defesa): mensagem genérica. */
@@ -97,6 +119,13 @@ public class TratadorDeErros {
         if (e instanceof ErrorResponse er) {
             // 404, 405, 415 etc. do próprio Spring MVC: mantém o status correto.
             return resposta(er.getStatusCode(), "REQUISICAO_NAO_ATENDIDA", "Requisição não atendida", req);
+        }
+        if (e instanceof DataAccessException dae && "55000".equals(sqlState(dae))) {
+            // object_not_in_prerequisite_state: gatilho recusou mudança de estado (ex.: pendência
+            // já encerrada, campo imutável). Estado mudou sob o cliente → recarregar.
+            LOG.info("estado recusado pelo banco (SQLSTATE 55000)");
+            return resposta(HttpStatus.CONFLICT, "ESTADO_NAO_PERMITE",
+                    "O registro não está mais em um estado que permita esta operação. Recarregue.", req);
         }
         if (e instanceof DataAccessException dae) {
             LOG.error("erro de acesso a dados (SQLSTATE {}) — {}", sqlState(dae), dae.getClass().getSimpleName());
