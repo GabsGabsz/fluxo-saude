@@ -16,7 +16,7 @@ concurrency:
 jobs:
   banco:
     name: Migrações + testes SQL (PostgreSQL 16)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04   # fixo: ubuntu-latest migra para o Ubuntu 26 em 19/10/2026; atualizar de forma deliberada
     timeout-minutes: 15
     services:
       postgres:
@@ -50,7 +50,7 @@ jobs:
 
   backend:
     name: Build + testes (Java 21)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04   # fixo: ubuntu-latest migra para o Ubuntu 26 em 19/10/2026; atualizar de forma deliberada
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
