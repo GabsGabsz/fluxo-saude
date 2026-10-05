@@ -30,10 +30,22 @@ CREATE TABLE fluxo.paciente (
     -- Nº de prontuário/atendimento do sistema hospitalar local (fonte da verdade externa).
     identificador_institucional text CHECK (identificador_institucional IS NULL
                                             OR identificador_institucional ~ '^[A-Za-z0-9./-]{1,40}$'),
+    -- RF-037: reconciliação de cadastro duplicado. O duplicado NÃO é apagado: aponta
+    -- para o cadastro principal e deixa de aceitar novos episódios; histórico preservado.
+    reconciliado_com_id       uuid,
+    reconciliado_em           timestamptz,
+    reconciliado_por          uuid REFERENCES fluxo.usuario (id),
+    justificativa_reconciliacao text CHECK (justificativa_reconciliacao IS NULL
+                                            OR length(btrim(justificativa_reconciliacao)) BETWEEN 3 AND 500),
     criado_em                 timestamptz NOT NULL DEFAULT clock_timestamp(),
     atualizado_em             timestamptz NOT NULL DEFAULT clock_timestamp(),
     versao                    integer NOT NULL DEFAULT 0,
-    UNIQUE (unidade_id, id)
+    UNIQUE (unidade_id, id),
+    FOREIGN KEY (unidade_id, reconciliado_com_id) REFERENCES fluxo.paciente (unidade_id, id),
+    CONSTRAINT paciente_reconciliacao_coerente CHECK (
+        (reconciliado_com_id IS NULL) = (reconciliado_em IS NULL)
+        AND (reconciliado_com_id IS NULL) = (justificativa_reconciliacao IS NULL)
+        AND reconciliado_com_id IS DISTINCT FROM id)
 );
 CREATE UNIQUE INDEX paciente_cns_unico ON fluxo.paciente (unidade_id, cns) WHERE cns IS NOT NULL;
 CREATE UNIQUE INDEX paciente_ident_unico ON fluxo.paciente (unidade_id, identificador_institucional)
@@ -42,6 +54,40 @@ CREATE INDEX paciente_nome_trgm ON fluxo.paciente
     USING gin (fluxo.normalizar_texto(nome) public.gin_trgm_ops);
 CREATE TRIGGER paciente_atualizado_em BEFORE UPDATE ON fluxo.paciente
     FOR EACH ROW EXECUTE FUNCTION fluxo.tg_atualizado_em();
+CREATE TRIGGER paciente_versao BEFORE UPDATE ON fluxo.paciente
+    FOR EACH ROW EXECUTE FUNCTION fluxo.tg_versao();
+
+-- Cadastro reconciliado é definitivo (não "desfaz" nem muda de principal).
+CREATE FUNCTION fluxo.tg_paciente_reconciliacao() RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path = pg_catalog
+AS $$
+BEGIN
+    IF OLD.reconciliado_com_id IS NOT NULL THEN
+        RAISE EXCEPTION 'cadastro reconciliado é imutável' USING ERRCODE = '55000';
+    END IF;
+    IF NEW.reconciliado_com_id IS NOT NULL THEN
+        NEW.reconciliado_por := fluxo.exigir_usuario();
+        NEW.reconciliado_em  := clock_timestamp();
+        IF EXISTS (SELECT 1 FROM fluxo.paciente p WHERE p.id = NEW.reconciliado_com_id AND p.reconciliado_com_id IS NOT NULL) THEN
+            RAISE EXCEPTION 'o cadastro principal também está reconciliado; use o principal final' USING ERRCODE = '23514';
+        END IF;
+        IF EXISTS (SELECT 1 FROM fluxo.episodio e WHERE e.paciente_id = NEW.id AND e.encerrado_em IS NULL) THEN
+            RAISE EXCEPTION 'cadastro duplicado com episódio ativo: encerre ou justifique o episódio antes de reconciliar'
+                USING ERRCODE = '23514';
+        END IF;
+    END IF;
+    RETURN NEW;
+END $$;
+CREATE TRIGGER paciente_reconciliacao BEFORE UPDATE ON fluxo.paciente
+    FOR EACH ROW EXECUTE FUNCTION fluxo.tg_paciente_reconciliacao();
+
+-- Limite inferior para instantes informados manualmente (parâmetro da unidade).
+CREATE FUNCTION fluxo.limite_passado(p_unidade_id uuid) RETURNS timestamptz
+    LANGUAGE sql VOLATILE
+    SET search_path = pg_catalog
+AS $$ SELECT clock_timestamp() - u.retroatividade_maxima FROM fluxo.unidade u WHERE u.id = p_unidade_id $$;
+GRANT EXECUTE ON FUNCTION fluxo.limite_passado(uuid) TO ${app_role};
 
 -- -----------------------------------------------------------------------------
 -- Episódio
@@ -63,6 +109,11 @@ CREATE TABLE fluxo.episodio (
     protocolo_numero            text CHECK (protocolo_numero IS NULL OR protocolo_numero ~ '^[A-Za-z0-9./-]{1,60}$'),
     desfecho                    fluxo.tipo_desfecho,
     encerrado_em                timestamptz,
+    -- RF-003: segundo episódio ativo do mesmo paciente é PERMITIDO, mas exige justificativa.
+    justificativa_duplicidade   text CHECK (justificativa_duplicidade IS NULL
+                                            OR length(btrim(justificativa_duplicidade)) BETWEEN 3 AND 300),
+    -- RN-017: continuidade entre unidades (ex.: UPA -> hospital monitorado) sem fundir episódios.
+    episodio_origem_id          uuid REFERENCES fluxo.episodio (id),
     justificativa_encerramento  text CHECK (justificativa_encerramento IS NULL
                                             OR length(btrim(justificativa_encerramento)) BETWEEN 3 AND 1000),
     criado_em                   timestamptz NOT NULL DEFAULT clock_timestamp(),
@@ -84,8 +135,8 @@ CREATE TABLE fluxo.episodio (
         AND (encerrado_em IS NULL OR encerrado_em >= etapa_desde))
 );
 
--- RF-003: no máximo UM episódio ativo por paciente na mesma unidade.
-CREATE UNIQUE INDEX episodio_ativo_unico ON fluxo.episodio (unidade_id, paciente_id) WHERE encerrado_em IS NULL;
+-- RF-003 (v1.1): duplicidade é DETECTADA (índice para a consulta), não bloqueada.
+CREATE INDEX episodio_ativo_paciente_idx ON fluxo.episodio (unidade_id, paciente_id) WHERE encerrado_em IS NULL;
 -- Torre de Controle (RF-010): casos ativos por unidade.
 CREATE INDEX episodio_ativos_idx ON fluxo.episodio (unidade_id, etapa_id, etapa_desde) WHERE encerrado_em IS NULL;
 CREATE INDEX episodio_encerrados_idx ON fluxo.episodio (unidade_id, encerrado_em) WHERE encerrado_em IS NOT NULL;
@@ -107,7 +158,9 @@ BEGIN
         END IF;
         IF NEW.unidade_id <> OLD.unidade_id OR NEW.paciente_id <> OLD.paciente_id
            OR NEW.entrada_em <> OLD.entrada_em OR NEW.criado_por <> OLD.criado_por
-           OR NEW.criado_em <> OLD.criado_em THEN
+           OR NEW.criado_em <> OLD.criado_em
+           OR NEW.justificativa_duplicidade IS DISTINCT FROM OLD.justificativa_duplicidade
+           OR NEW.episodio_origem_id IS DISTINCT FROM OLD.episodio_origem_id THEN
             RAISE EXCEPTION 'campos de identidade do episódio não podem ser alterados' USING ERRCODE = '55000';
         END IF;
     END IF;
@@ -115,6 +168,21 @@ BEGIN
     SELECT * INTO STRICT v_etapa FROM fluxo.etapa WHERE id = NEW.etapa_id;
 
     IF TG_OP = 'INSERT' THEN
+        -- RF-003/RF-037: serializa aberturas do mesmo paciente (FOR UPDATE) para que a
+        -- detecção de duplicidade seja confiável mesmo com duas aberturas simultâneas.
+        IF EXISTS (SELECT 1 FROM fluxo.paciente p WHERE p.id = NEW.paciente_id AND p.reconciliado_com_id IS NOT NULL) THEN
+            RAISE EXCEPTION 'cadastro reconciliado: abra o episódio no cadastro principal' USING ERRCODE = '23514';
+        END IF;
+        PERFORM 1 FROM fluxo.paciente p WHERE p.id = NEW.paciente_id FOR UPDATE;
+        IF NEW.justificativa_duplicidade IS NULL AND EXISTS (
+               SELECT 1 FROM fluxo.episodio e
+                WHERE e.unidade_id = NEW.unidade_id AND e.paciente_id = NEW.paciente_id AND e.encerrado_em IS NULL) THEN
+            RAISE EXCEPTION 'possível duplicidade: o paciente já tem episódio ativo nesta unidade; confirme com justificativa'
+                USING ERRCODE = '23505';
+        END IF;
+        IF NEW.entrada_em < fluxo.limite_passado(NEW.unidade_id) THEN
+            RAISE EXCEPTION 'data/hora de entrada além da retroatividade permitida pela unidade' USING ERRCODE = '22007';
+        END IF;
         IF v_etapa.natureza = 'DESFECHO' THEN
             RAISE EXCEPTION 'episódio não pode ser aberto em etapa de desfecho' USING ERRCODE = '23514';
         END IF;
@@ -138,6 +206,12 @@ BEGIN
         END IF;
     ELSIF NEW.etapa_desde <> OLD.etapa_desde THEN
         RAISE EXCEPTION 'início da etapa só muda com mudança de etapa' USING ERRCODE = '55000';
+    END IF;
+
+    IF (TG_OP = 'UPDATE' AND NEW.etapa_desde <> OLD.etapa_desde AND NEW.etapa_desde < fluxo.limite_passado(NEW.unidade_id))
+       OR (NEW.bloqueio_desde IS DISTINCT FROM (CASE WHEN TG_OP = 'UPDATE' THEN OLD.bloqueio_desde END)
+           AND NEW.bloqueio_desde < fluxo.limite_passado(NEW.unidade_id)) THEN
+        RAISE EXCEPTION 'data/hora além da retroatividade permitida pela unidade' USING ERRCODE = '22007';
     END IF;
 
     IF NEW.etapa_desde > fluxo.limite_futuro()
@@ -199,6 +273,8 @@ CREATE TRIGGER episodio_regras BEFORE INSERT OR UPDATE ON fluxo.episodio
     FOR EACH ROW EXECUTE FUNCTION fluxo.tg_episodio_regras();
 CREATE TRIGGER episodio_atualizado_em BEFORE UPDATE ON fluxo.episodio
     FOR EACH ROW EXECUTE FUNCTION fluxo.tg_atualizado_em();
+CREATE TRIGGER episodio_versao BEFORE UPDATE ON fluxo.episodio
+    FOR EACH ROW EXECUTE FUNCTION fluxo.tg_versao();
 CREATE TRIGGER episodio_sem_exclusao BEFORE DELETE OR TRUNCATE ON fluxo.episodio
     FOR EACH STATEMENT EXECUTE FUNCTION auditoria.tg_imutavel();
 
@@ -242,6 +318,32 @@ CREATE INDEX evento_episodio_linha_idx ON fluxo.evento_episodio (episodio_id, oc
 -- Autor e instante de registro definidos pelo banco (sobrescrevem o que vier).
 CREATE TRIGGER evento_autoria BEFORE INSERT ON fluxo.evento_episodio
     FOR EACH ROW EXECUTE FUNCTION fluxo.tg_autoria('autor_id', 'registrado_em');
+-- RNF-017: fato informado com horário anterior ao do servidor (além do limiar da
+-- unidade) é AJUSTE MANUAL: precisa estar marcado e justificado no próprio evento,
+-- e respeitar a retroatividade máxima da unidade. (Nome "evento_verificar_..."
+-- garante execução após "evento_autoria", que fixa registrado_em.)
+CREATE FUNCTION fluxo.tg_evento_ajuste_manual() RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path = pg_catalog
+AS $$
+DECLARE
+    v_unidade fluxo.unidade;
+BEGIN
+    SELECT * INTO STRICT v_unidade FROM fluxo.unidade WHERE id = NEW.unidade_id;
+    IF NEW.registrado_em - NEW.ocorrido_em > v_unidade.limiar_ajuste_manual THEN
+        IF NEW.registrado_em - NEW.ocorrido_em > v_unidade.retroatividade_maxima THEN
+            RAISE EXCEPTION 'evento além da retroatividade permitida pela unidade' USING ERRCODE = '22007';
+        END IF;
+        IF NEW.dados ->> 'ajuste_manual' IS DISTINCT FROM 'true'
+           OR length(btrim(coalesce(NEW.dados ->> 'ajuste_justificativa', ''))) < 3 THEN
+            RAISE EXCEPTION 'horário informado manualmente exige marcação e justificativa de ajuste (RNF-017)'
+                USING ERRCODE = '23514';
+        END IF;
+    END IF;
+    RETURN NEW;
+END $$;
+CREATE TRIGGER evento_verificar_ajuste_manual BEFORE INSERT ON fluxo.evento_episodio
+    FOR EACH ROW EXECUTE FUNCTION fluxo.tg_evento_ajuste_manual();
 CREATE TRIGGER evento_imutavel BEFORE UPDATE OR DELETE ON fluxo.evento_episodio
     FOR EACH ROW EXECUTE FUNCTION auditoria.tg_imutavel();
 CREATE TRIGGER evento_sem_truncate BEFORE TRUNCATE ON fluxo.evento_episodio
@@ -250,7 +352,9 @@ CREATE TRIGGER evento_sem_truncate BEFORE TRUNCATE ON fluxo.evento_episodio
 -- -----------------------------------------------------------------------------
 -- Pendências (RF-007, RF-013, RN-005)
 -- -----------------------------------------------------------------------------
-CREATE TYPE fluxo.criticidade AS ENUM ('BAIXA', 'MEDIA', 'ALTA', 'CRITICA');  -- operacional, NÃO clínica (RN-007)
+-- RN-007 / RN-013: criticidade OPERACIONAL (atraso/urgência de ação). Nunca é
+-- classificação de risco clínico e nunca é derivada de dado clínico.
+CREATE TYPE fluxo.criticidade_operacional AS ENUM ('BAIXA', 'MEDIA', 'ALTA', 'CRITICA');
 CREATE TYPE fluxo.status_pendencia AS ENUM ('ABERTA', 'RESOLVIDA', 'CANCELADA', 'ENCERRADA_POR_DESFECHO');
 
 CREATE TABLE fluxo.pendencia (
@@ -263,7 +367,7 @@ CREATE TABLE fluxo.pendencia (
     responsavel_setor_id    uuid,
     responsavel_papel       fluxo.papel,
     prazo                   timestamptz NOT NULL,
-    criticidade             fluxo.criticidade NOT NULL,
+    criticidade_operacional fluxo.criticidade_operacional NOT NULL,
     status                  fluxo.status_pendencia NOT NULL DEFAULT 'ABERTA',
     criada_em               timestamptz NOT NULL DEFAULT clock_timestamp(),
     criada_por              uuid NOT NULL DEFAULT fluxo.ctx_usuario() REFERENCES fluxo.usuario (id),
@@ -343,6 +447,8 @@ CREATE TRIGGER pendencia_regras BEFORE INSERT OR UPDATE ON fluxo.pendencia
     FOR EACH ROW EXECUTE FUNCTION fluxo.tg_pendencia_regras();
 CREATE TRIGGER pendencia_atualizado_em BEFORE UPDATE ON fluxo.pendencia
     FOR EACH ROW EXECUTE FUNCTION fluxo.tg_atualizado_em();
+CREATE TRIGGER pendencia_versao BEFORE UPDATE ON fluxo.pendencia
+    FOR EACH ROW EXECUTE FUNCTION fluxo.tg_versao();
 CREATE TRIGGER pendencia_sem_exclusao BEFORE DELETE OR TRUNCATE ON fluxo.pendencia
     FOR EACH STATEMENT EXECUTE FUNCTION auditoria.tg_imutavel();
 

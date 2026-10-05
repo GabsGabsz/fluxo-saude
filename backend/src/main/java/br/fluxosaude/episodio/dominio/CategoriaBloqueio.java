@@ -7,5 +7,7 @@ public enum CategoriaBloqueio {
     LOGISTICA,
     LEITO_CAPACIDADE,
     ADMINISTRATIVO,
-    OUTROS
+    OUTROS,
+    /** RF-035: causa ainda não definida / em investigação (temporária, exige justificativa). */
+    NAO_DEFINIDA
 }

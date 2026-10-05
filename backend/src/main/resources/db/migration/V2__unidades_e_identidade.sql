@@ -7,7 +7,7 @@ CREATE TYPE fluxo.tipo_unidade AS ENUM ('UPA', 'HOSPITAL', 'OUTRO');
 -- Perfis da ERS §3. Um usuário pode ter perfis diferentes em unidades diferentes.
 CREATE TYPE fluxo.papel AS ENUM (
     'ADMINISTRADOR',
-    'COORDENACAO_NIR',
+    'COORDENACAO_FLUXO',   -- coordenação de fluxo / regulação interna / NIR, conforme a unidade (RN-015)
     'ENFERMAGEM',
     'MEDICO',
     'TRANSPORTE',
@@ -23,6 +23,15 @@ CREATE TABLE fluxo.unidade (
     -- Piauí = America/Fortaleza (UTC-3, sem horário de verão). Usado só para
     -- apresentação/relatórios; todo instante é armazenado em timestamptz (UTC).
     fuso_horario  text NOT NULL DEFAULT 'America/Fortaleza',
+    -- RNF-017 / RF-040: parâmetros de horário informado manualmente (por unidade).
+    -- Fatos informados mais de "limiar_ajuste_manual" antes do relógio do servidor são
+    -- AJUSTES MANUAIS: exigem justificativa e ficam marcados na linha do tempo.
+    -- "retroatividade_maxima" limita o ajuste (ex.: ampliar temporariamente em
+    -- contingência — RNF-018). Valores iniciais são técnicos e devem ser validados (V-10).
+    retroatividade_maxima interval NOT NULL DEFAULT interval '24 hours'
+        CHECK (retroatividade_maxima BETWEEN interval '0' AND interval '7 days'),
+    limiar_ajuste_manual  interval NOT NULL DEFAULT interval '5 minutes'
+        CHECK (limiar_ajuste_manual BETWEEN interval '1 minute' AND interval '1 hour'),
     ativa         boolean NOT NULL DEFAULT true,
     criado_em     timestamptz NOT NULL DEFAULT clock_timestamp(),
     atualizado_em timestamptz NOT NULL DEFAULT clock_timestamp(),
@@ -99,3 +108,10 @@ CREATE TRIGGER setor_atualizado_em BEFORE UPDATE ON fluxo.setor
     FOR EACH ROW EXECUTE FUNCTION fluxo.tg_atualizado_em();
 CREATE TRIGGER usuario_atualizado_em BEFORE UPDATE ON fluxo.usuario
     FOR EACH ROW EXECUTE FUNCTION fluxo.tg_atualizado_em();
+
+CREATE TRIGGER unidade_versao BEFORE UPDATE ON fluxo.unidade
+    FOR EACH ROW EXECUTE FUNCTION fluxo.tg_versao();
+CREATE TRIGGER setor_versao BEFORE UPDATE ON fluxo.setor
+    FOR EACH ROW EXECUTE FUNCTION fluxo.tg_versao();
+CREATE TRIGGER usuario_versao BEFORE UPDATE ON fluxo.usuario
+    FOR EACH ROW EXECUTE FUNCTION fluxo.tg_versao();

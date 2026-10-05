@@ -29,7 +29,7 @@ $$, 'row-level security');
 INSERT INTO fluxo.paciente (id, unidade_id, nome)
 VALUES ('22222222-0000-0000-0000-000000000001', '00000000-0000-0000-0000-00000000000a', 'Maria Teste');
 SELECT teste.espera_erro($$
-    UPDATE fluxo.paciente SET unidade_id = '00000000-0000-0000-0000-00000000000b'
+    UPDATE fluxo.paciente SET versao = versao + 1, unidade_id = '00000000-0000-0000-0000-00000000000b'
      WHERE id = '22222222-0000-0000-0000-000000000001'
 $$, 'row-level security');
 
@@ -38,7 +38,7 @@ SELECT teste.ctx('11111111-1111-1111-1111-000000000003', '00000000-0000-0000-000
 SELECT teste.afirma((SELECT count(*) FROM fluxo.paciente WHERE id = '22222222-0000-0000-0000-000000000001') = 0,
                     'unidade B não vê paciente da A');
 -- UPDATE/"DELETE" cego também não alcança linhas de outra unidade
-UPDATE fluxo.paciente SET nome = 'Hack' WHERE id = '22222222-0000-0000-0000-000000000001';
+UPDATE fluxo.paciente SET versao = versao + 1, nome = 'Hack' WHERE id = '22222222-0000-0000-0000-000000000001';
 SELECT teste.ctx('11111111-1111-1111-1111-000000000002', '00000000-0000-0000-0000-00000000000a');
 SELECT teste.afirma((SELECT nome FROM fluxo.paciente WHERE id = '22222222-0000-0000-0000-000000000001') = 'Maria Teste',
                     'update de outra unidade não teve efeito');

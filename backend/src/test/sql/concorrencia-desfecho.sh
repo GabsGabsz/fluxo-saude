@@ -16,7 +16,7 @@ SQL
 # Sessão 1: cria pendência e segura a transação aberta 2 s
 psql -X -q -U fluxo_app -d "$DB" >/tmp/corrida1.log 2>&1 <<SQL &
 BEGIN; $CTX
-INSERT INTO fluxo.pendencia (unidade_id, episodio_id, categoria, descricao, responsavel_papel, prazo, criticidade)
+INSERT INTO fluxo.pendencia (unidade_id, episodio_id, categoria, descricao, responsavel_papel, prazo, criticidade_operacional)
 VALUES ('00000000-0000-0000-0000-00000000000a', '$EP', 'LOGISTICA', 'Pendência concorrente', 'TRANSPORTE', now() + interval '1 hour', 'ALTA');
 SELECT pg_sleep(2);
 COMMIT;
@@ -25,7 +25,7 @@ sleep 0.5
 # Sessão 2: encerra o episódio (alta) no meio da transação da sessão 1
 psql -X -q -U fluxo_app -d "$DB" >/tmp/corrida2.log 2>&1 <<SQL
 BEGIN; $CTX
-UPDATE fluxo.episodio SET etapa_id = teste.etapa('00000000-0000-0000-0000-00000000000a','ALTA'),
+UPDATE fluxo.episodio SET versao = versao + 1, etapa_id = teste.etapa('00000000-0000-0000-0000-00000000000a','ALTA'),
        etapa_desde = clock_timestamp(), desfecho = 'ALTA', encerrado_em = clock_timestamp() WHERE id = '$EP';
 COMMIT;
 SQL

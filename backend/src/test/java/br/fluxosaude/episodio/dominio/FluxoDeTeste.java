@@ -84,7 +84,8 @@ final class FluxoDeTeste {
     }
 
     Episodio abrirAgora() {
-        return Episodio.abrir(new Episodio.ComandoAbertura(PACIENTE, SETOR, relogio.instant()), fluxo, AUTOR, relogio, ids);
+        return Episodio.abrir(new Episodio.ComandoAbertura(PACIENTE, SETOR, MomentoInformado.agora(relogio), null),
+                false, fluxo, AUTOR, relogio, ids);
     }
 
     void mudar(Episodio ep, String etapa, String motivo) {
@@ -93,7 +94,7 @@ final class FluxoDeTeste {
 
     void mudar(Episodio ep, String etapa, String motivo, ProtocoloExterno protocolo, String justificativa) {
         Episodio.MotivoInformado m = motivo == null ? null : new Episodio.MotivoInformado(motivo(motivo), null);
-        ep.mudarEtapa(new Episodio.ComandoMudancaEtapa(etapa(etapa), relogio.instant(), m, protocolo, justificativa),
+        ep.mudarEtapa(new Episodio.ComandoMudancaEtapa(etapa(etapa), MomentoInformado.agora(relogio), m, protocolo, justificativa),
                 fluxo, AUTOR, relogio, ids);
     }
 

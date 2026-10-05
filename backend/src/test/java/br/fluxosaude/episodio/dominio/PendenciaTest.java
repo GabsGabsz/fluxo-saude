@@ -30,7 +30,7 @@ class PendenciaTest {
 
     private Pendencia criar(Duration prazoEm) {
         return Pendencia.criar(ep, new Pendencia.ComandoCriacao(CategoriaBloqueio.LOGISTICA, "  Acionar transporte  ",
-                        new Responsavel.Perfil(Papel.TRANSPORTE), t.relogio.instant().plus(prazoEm), Criticidade.ALTA),
+                        new Responsavel.Perfil(Papel.TRANSPORTE), t.relogio.instant().plus(prazoEm), CriticidadeOperacional.ALTA),
                 FluxoDeTeste.AUTOR, t.relogio, t.ids);
     }
 
@@ -51,7 +51,7 @@ class PendenciaTest {
         assertEquals("PRAZO_PASSADO", erro(() -> criar(Duration.ofHours(-1))));
         assertEquals("CAMPO_OBRIGATORIO", erro(() -> Pendencia.criar(ep, new Pendencia.ComandoCriacao(
                 CategoriaBloqueio.LOGISTICA, "   ", new Responsavel.Perfil(Papel.TRANSPORTE),
-                t.relogio.instant().plusSeconds(60), Criticidade.BAIXA), FluxoDeTeste.AUTOR, t.relogio, t.ids)));
+                t.relogio.instant().plusSeconds(60), CriticidadeOperacional.BAIXA), FluxoDeTeste.AUTOR, t.relogio, t.ids)));
     }
 
     @Test

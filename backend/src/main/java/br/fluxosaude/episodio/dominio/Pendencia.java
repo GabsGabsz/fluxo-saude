@@ -25,7 +25,7 @@ public final class Pendencia {
     private static final Duration TOLERANCIA_PRAZO = Duration.ofMinutes(5);
 
     public record ComandoCriacao(CategoriaBloqueio categoria, String descricao, Responsavel responsavel,
-                                 Instant prazo, Criticidade criticidade) {
+                                 Instant prazo, CriticidadeOperacional criticidade) {
         public ComandoCriacao {
             Objects.requireNonNull(categoria, "categoria");
             Objects.requireNonNull(responsavel, "responsável");
@@ -41,7 +41,7 @@ public final class Pendencia {
     private final String descricao;
     private Responsavel responsavel;
     private Instant prazo;
-    private final Criticidade criticidade;
+    private final CriticidadeOperacional criticidade;
     private StatusPendencia status;
     private final Instant criadaEm;
     private String resolucao;
@@ -50,7 +50,7 @@ public final class Pendencia {
     private final transient List<EventoEpisodio> eventosPendentes = new ArrayList<>();
 
     private Pendencia(UUID id, UUID unidadeId, UUID episodioId, CategoriaBloqueio categoria, String descricao,
-                      Responsavel responsavel, Instant prazo, Criticidade criticidade, StatusPendencia status,
+                      Responsavel responsavel, Instant prazo, CriticidadeOperacional criticidade, StatusPendencia status,
                       Instant criadaEm, String resolucao, int versao) {
         this.id = Objects.requireNonNull(id);
         this.unidadeId = Objects.requireNonNull(unidadeId);
@@ -81,7 +81,7 @@ public final class Pendencia {
 
     public static Pendencia reconstituir(UUID id, UUID unidadeId, UUID episodioId, CategoriaBloqueio categoria,
                                          String descricao, Responsavel responsavel, Instant prazo,
-                                         Criticidade criticidade, StatusPendencia status, Instant criadaEm,
+                                         CriticidadeOperacional criticidade, StatusPendencia status, Instant criadaEm,
                                          String resolucao, int versao) {
         return new Pendencia(id, unidadeId, episodioId, categoria, descricao, responsavel, prazo, criticidade,
                 status, criadaEm, resolucao, versao);
@@ -146,7 +146,7 @@ public final class Pendencia {
     public String descricao() { return descricao; }
     public Responsavel responsavel() { return responsavel; }
     public Instant prazo() { return prazo; }
-    public Criticidade criticidade() { return criticidade; }
+    public CriticidadeOperacional criticidade() { return criticidade; }
     public StatusPendencia status() { return status; }
     public Instant criadaEm() { return criadaEm; }
     public String resolucao() { return resolucao; }

@@ -123,6 +123,21 @@ BEGIN
     RETURN NEW;
 END $$;
 
+-- RF-036 / RNF-014: controle otimista garantido no banco. Todo UPDATE precisa
+-- informar versao = versao anterior + 1; combinado com "WHERE versao = :lida" na
+-- aplicação, nenhuma escrita concorrente sobrescreve outra silenciosamente.
+CREATE FUNCTION fluxo.tg_versao() RETURNS trigger
+    LANGUAGE plpgsql
+    SET search_path = pg_catalog
+AS $$
+BEGIN
+    IF NEW.versao IS DISTINCT FROM OLD.versao + 1 THEN
+        RAISE EXCEPTION 'controle de concorrência: versao deve ser % (recebido %)', OLD.versao + 1, NEW.versao
+            USING ERRCODE = '40001';
+    END IF;
+    RETURN NEW;
+END $$;
+
 -- Mantém atualizado_em coerente sem depender da aplicação.
 CREATE FUNCTION fluxo.tg_atualizado_em() RETURNS trigger
     LANGUAGE plpgsql

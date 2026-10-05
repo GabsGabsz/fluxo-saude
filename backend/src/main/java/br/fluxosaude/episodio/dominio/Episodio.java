@@ -33,11 +33,16 @@ public final class Episodio {
         }
     }
 
-    public record ComandoAbertura(UUID pacienteId, UUID setorId, Instant entradaEm) {
+    /**
+     * @param entrada                  momento de entrada (servidor, ou ajuste manual justificado)
+     * @param justificativaDuplicidade obrigatória se o paciente já tiver episódio ativo (RF-003)
+     */
+    public record ComandoAbertura(UUID pacienteId, UUID setorId, MomentoInformado entrada,
+                                  String justificativaDuplicidade) {
         public ComandoAbertura {
             Objects.requireNonNull(pacienteId, "paciente");
             Objects.requireNonNull(setorId, "setor");
-            Objects.requireNonNull(entradaEm, "entrada");
+            Objects.requireNonNull(entrada, "entrada");
         }
     }
 
@@ -46,11 +51,11 @@ public final class Episodio {
      * @param protocolo     registra/atualiza o protocolo externo junto com a mudança (RF-009)
      * @param justificativa obrigatória em desfechos que a exigem (RF-015)
      */
-    public record ComandoMudancaEtapa(UUID etapaDestinoId, Instant ocorridoEm, MotivoInformado motivo,
+    public record ComandoMudancaEtapa(UUID etapaDestinoId, MomentoInformado momento, MotivoInformado motivo,
                                       ProtocoloExterno protocolo, String justificativa) {
         public ComandoMudancaEtapa {
             Objects.requireNonNull(etapaDestinoId, "etapa destino");
-            Objects.requireNonNull(ocorridoEm, "instante");
+            Objects.requireNonNull(momento, "instante");
         }
     }
 
@@ -68,6 +73,7 @@ public final class Episodio {
     private TipoDesfecho desfecho;
     private Instant encerradoEm;
     private String justificativaEncerramento;
+    private String justificativaDuplicidade;
     private final int versao;
     /** Último instante de fato registrado — piso cronológico para novos registros. */
     private Instant ultimoFatoEm;
@@ -89,16 +95,29 @@ public final class Episodio {
 
     // ------------------------------------------------------------------ fábrica
 
-    /** RF-002. A unicidade de episódio ativo (RF-003) é verificada na aplicação + índice único. */
-    public static Episodio abrir(ComandoAbertura cmd, FluxoConfigurado fluxo, UUID autorId,
-                                 Clock clock, Supplier<UUID> ids) {
-        Instant agora = clock.instant();
-        fluxo.politicaTempo().validar(cmd.entradaEm(), agora, null, "Data/hora de entrada");
+    /**
+     * RF-002 / RF-003. Duplicidade NÃO bloqueia: se o paciente já tem episódio ativo na
+     * unidade (consulta feita pelo caso de uso; o banco repete a verificação com bloqueio
+     * do cadastro), a abertura exige justificativa e gera evento próprio para reconciliação.
+     */
+    public static Episodio abrir(ComandoAbertura cmd, boolean pacienteJaTemEpisodioAtivo, FluxoConfigurado fluxo,
+                                 UUID autorId, Clock clock, Supplier<UUID> ids) {
+        PoliticaTempo.Validado entrada = fluxo.politicaTempo().validar(cmd.entrada(), clock.instant(), null,
+                "Data/hora de entrada");
+        String justificativaDup = Textos.opcional(cmd.justificativaDuplicidade(), "Justificativa da duplicidade", 3, 300);
+        if (pacienteJaTemEpisodioAtivo) {
+            exigir(justificativaDup != null, "POSSIVEL_DUPLICIDADE",
+                    "O paciente já tem episódio ativo nesta unidade; confirme com justificativa");
+        }
         Etapa inicial = fluxo.etapaInicial();
         Episodio ep = new Episodio(ids.get(), fluxo.unidadeId(), cmd.pacienteId(), cmd.setorId(),
-                cmd.entradaEm(), inicial.id(), cmd.entradaEm(), 0);
-        ep.registrar(ids, TipoEvento.EPISODIO_ABERTO, cmd.entradaEm(), autorId,
+                entrada.instante(), inicial.id(), entrada.instante(), 0);
+        ep.justificativaDuplicidade = pacienteJaTemEpisodioAtivo ? justificativaDup : null;
+        ep.registrar(ids, TipoEvento.EPISODIO_ABERTO, entrada, autorId,
                 dados("etapa", inicial.codigo(), "setor_id", cmd.setorId().toString()));
+        if (pacienteJaTemEpisodioAtivo) {
+            ep.registrar(ids, TipoEvento.DUPLICIDADE_JUSTIFICADA, entrada, autorId, dados());
+        }
         return ep;
     }
 
@@ -106,8 +125,8 @@ public final class Episodio {
     public static Episodio reconstituir(UUID id, UUID unidadeId, UUID pacienteId, UUID setorId, Instant entradaEm,
                                         UUID etapaId, Instant etapaDesde, Bloqueio bloqueio, ProtocoloExterno protocolo,
                                         UUID especialidadeRequeridaId, String destinoDescricao, TipoDesfecho desfecho,
-                                        Instant encerradoEm, String justificativaEncerramento, Instant ultimoFatoEm,
-                                        int versao) {
+                                        Instant encerradoEm, String justificativaEncerramento,
+                                        String justificativaDuplicidade, Instant ultimoFatoEm, int versao) {
         Episodio ep = new Episodio(id, unidadeId, pacienteId, setorId, entradaEm, etapaId, etapaDesde, versao);
         ep.bloqueio = bloqueio;
         ep.protocolo = protocolo;
@@ -116,6 +135,7 @@ public final class Episodio {
         ep.desfecho = desfecho;
         ep.encerradoEm = encerradoEm;
         ep.justificativaEncerramento = justificativaEncerramento;
+        ep.justificativaDuplicidade = justificativaDuplicidade;
         ep.ultimoFatoEm = ultimoFatoEm == null || ultimoFatoEm.isBefore(etapaDesde) ? etapaDesde : ultimoFatoEm;
         return ep;
     }
@@ -133,8 +153,9 @@ public final class Episodio {
         exigir(fluxo.transicaoPermitida(origem.id(), destino.id()), "TRANSICAO_NAO_PERMITIDA",
                 "Não é permitido passar de \"" + origem.nome() + "\" para \"" + destino.nome() + "\"");
 
-        Instant quando = cmd.ocorridoEm();
-        fluxo.politicaTempo().validar(quando, clock.instant(), ultimoFatoEm, "Data/hora da mudança de etapa");
+        PoliticaTempo.Validado momento = fluxo.politicaTempo().validar(cmd.momento(), clock.instant(), ultimoFatoEm,
+                "Data/hora da mudança de etapa");
+        Instant quando = momento.instante();
 
         // ---- 1. Validar TUDO antes de alterar qualquer estado (comando atômico) ----
         ProtocoloExterno protocoloResultante = cmd.protocolo() != null ? cmd.protocolo() : protocolo;
@@ -156,76 +177,80 @@ public final class Episodio {
         // ---- 2. Aplicar ----
         if (cmd.protocolo() != null && !cmd.protocolo().equals(protocolo)) {
             protocolo = cmd.protocolo();
-            registrar(ids, TipoEvento.PROTOCOLO_REGISTRADO, quando, autorId,
+            registrar(ids, TipoEvento.PROTOCOLO_REGISTRADO, momento, autorId,
                     dados("sistema", protocolo.sistema(), "numero", protocolo.numero()));
         }
         etapaId = destino.id();
         etapaDesde = quando;
         ultimoFatoEm = quando;
-        registrar(ids, TipoEvento.ETAPA_ALTERADA, quando, autorId,
+        registrar(ids, TipoEvento.ETAPA_ALTERADA, momento, autorId,
                 dados("de", origem.codigo(), "para", destino.codigo()));
-        aplicarBloqueio(novoBloqueio, quando, fluxo, autorId, ids);
+        aplicarBloqueio(novoBloqueio, momento, fluxo, autorId, ids);
 
         if (destino.terminal()) {
             desfecho = destino.desfecho();
             encerradoEm = quando;
             justificativaEncerramento = justificativa;
-            registrar(ids, TipoEvento.EPISODIO_ENCERRADO, quando, autorId, dados("desfecho", desfecho.name()));
+            registrar(ids, TipoEvento.EPISODIO_ENCERRADO, momento, autorId, dados("desfecho", desfecho.name()));
         }
     }
 
     /** Troca/define o motivo sem mudar de etapa (ex.: "sem vaga" → "aguardando aceite"). */
-    public void definirMotivo(MotivoInformado motivo, Instant ocorridoEm, FluxoConfigurado fluxo, UUID autorId,
+    public void definirMotivo(MotivoInformado motivo, MomentoInformado informado, FluxoConfigurado fluxo, UUID autorId,
                               Clock clock, Supplier<UUID> ids) {
         exigirAberto();
         exigirMesmaUnidade(fluxo);
         Etapa atual = fluxo.etapa(etapaId);
         exigir(motivo != null || !atual.exigeMotivoBloqueio(), "RN-003",
                 "A etapa \"" + atual.nome() + "\" exige o motivo do bloqueio");
-        fluxo.politicaTempo().validar(ocorridoEm, clock.instant(), ultimoFatoEm, "Data/hora do bloqueio");
-        Bloqueio novo = calcularBloqueio(motivo, ocorridoEm, fluxo);
-        ultimoFatoEm = ocorridoEm;
-        aplicarBloqueio(novo, ocorridoEm, fluxo, autorId, ids);
+        PoliticaTempo.Validado momento = fluxo.politicaTempo().validar(informado, clock.instant(), ultimoFatoEm,
+                "Data/hora do bloqueio");
+        Bloqueio novo = calcularBloqueio(motivo, momento.instante(), fluxo);
+        ultimoFatoEm = momento.instante();
+        aplicarBloqueio(novo, momento, fluxo, autorId, ids);
     }
 
-    public void registrarProtocolo(ProtocoloExterno novo, Instant ocorridoEm, FluxoConfigurado fluxo, UUID autorId,
-                                   Clock clock, Supplier<UUID> ids) {
+    public void registrarProtocolo(ProtocoloExterno novo, MomentoInformado informado, FluxoConfigurado fluxo,
+                                   UUID autorId, Clock clock, Supplier<UUID> ids) {
         exigirAberto();
         Objects.requireNonNull(novo);
-        fluxo.politicaTempo().validar(ocorridoEm, clock.instant(), ultimoFatoEm, "Data/hora do protocolo");
+        PoliticaTempo.Validado momento = fluxo.politicaTempo().validar(informado, clock.instant(), ultimoFatoEm,
+                "Data/hora do protocolo");
         if (novo.equals(protocolo)) {
             return;
         }
         protocolo = novo;
-        ultimoFatoEm = ocorridoEm;
-        registrar(ids, TipoEvento.PROTOCOLO_REGISTRADO, ocorridoEm, autorId,
+        ultimoFatoEm = momento.instante();
+        registrar(ids, TipoEvento.PROTOCOLO_REGISTRADO, momento, autorId,
                 dados("sistema", novo.sistema(), "numero", novo.numero()));
     }
 
-    public void definirDestino(UUID especialidadeId, String descricao, Instant ocorridoEm, FluxoConfigurado fluxo,
-                               UUID autorId, Clock clock, Supplier<UUID> ids) {
+    public void definirDestino(UUID especialidadeId, String descricao, MomentoInformado informado,
+                               FluxoConfigurado fluxo, UUID autorId, Clock clock, Supplier<UUID> ids) {
         exigirAberto();
-        fluxo.politicaTempo().validar(ocorridoEm, clock.instant(), ultimoFatoEm, "Data/hora do destino");
+        PoliticaTempo.Validado momento = fluxo.politicaTempo().validar(informado, clock.instant(), ultimoFatoEm,
+                "Data/hora do destino");
         String desc = Textos.opcional(descricao, "Destino", 1, 200);
         especialidadeRequeridaId = especialidadeId;
         destinoDescricao = desc;
-        ultimoFatoEm = ocorridoEm;
-        registrar(ids, TipoEvento.DESTINO_DEFINIDO, ocorridoEm, autorId,
+        ultimoFatoEm = momento.instante();
+        registrar(ids, TipoEvento.DESTINO_DEFINIDO, momento, autorId,
                 dados("especialidade_id", especialidadeId == null ? null : especialidadeId.toString()));
     }
 
-    public void transferirSetor(UUID novoSetorId, Instant ocorridoEm, FluxoConfigurado fluxo, UUID autorId,
+    public void transferirSetor(UUID novoSetorId, MomentoInformado informado, FluxoConfigurado fluxo, UUID autorId,
                                 Clock clock, Supplier<UUID> ids) {
         exigirAberto();
         Objects.requireNonNull(novoSetorId);
         if (novoSetorId.equals(setorId)) {
             return;
         }
-        fluxo.politicaTempo().validar(ocorridoEm, clock.instant(), ultimoFatoEm, "Data/hora da troca de setor");
+        PoliticaTempo.Validado momento = fluxo.politicaTempo().validar(informado, clock.instant(), ultimoFatoEm,
+                "Data/hora da troca de setor");
         UUID anterior = setorId;
         setorId = novoSetorId;
-        ultimoFatoEm = ocorridoEm;
-        registrar(ids, TipoEvento.SETOR_ALTERADO, ocorridoEm, autorId,
+        ultimoFatoEm = momento.instante();
+        registrar(ids, TipoEvento.SETOR_ALTERADO, momento, autorId,
                 dados("de", anterior.toString(), "para", novoSetorId.toString()));
     }
 
@@ -272,6 +297,7 @@ public final class Episodio {
     public Optional<TipoDesfecho> desfecho() { return Optional.ofNullable(desfecho); }
     public Optional<Instant> encerradoEm() { return Optional.ofNullable(encerradoEm); }
     public Optional<String> justificativaEncerramento() { return Optional.ofNullable(justificativaEncerramento); }
+    public Optional<String> justificativaDuplicidade() { return Optional.ofNullable(justificativaDuplicidade); }
     public int versao() { return versao; }
 
     // ---------------------------------------------------------------- internos
@@ -291,7 +317,7 @@ public final class Episodio {
         return new Bloqueio(motivo.id(), detalhe, mesmoMotivo ? bloqueio.desde() : quando);
     }
 
-    private void aplicarBloqueio(Bloqueio novo, Instant quando, FluxoConfigurado fluxo, UUID autorId,
+    private void aplicarBloqueio(Bloqueio novo, PoliticaTempo.Validado quando, FluxoConfigurado fluxo, UUID autorId,
                                  Supplier<UUID> ids) {
         if (Objects.equals(novo, bloqueio)) {
             return;
@@ -318,8 +344,15 @@ public final class Episodio {
         }
     }
 
-    private void registrar(Supplier<UUID> ids, TipoEvento tipo, Instant quando, UUID autorId, Map<String, String> dados) {
-        eventosPendentes.add(new EventoEpisodio(ids.get(), id, tipo, quando, autorId, dados, null));
+    /** Eventos com horário ajustado manualmente carregam a marcação e a justificativa (RNF-017). */
+    private void registrar(Supplier<UUID> ids, TipoEvento tipo, PoliticaTempo.Validado quando, UUID autorId,
+                           Map<String, String> dados) {
+        Map<String, String> d = new LinkedHashMap<>(dados);
+        if (quando.ajusteManual()) {
+            d.put("ajuste_manual", "true");
+            d.put("ajuste_justificativa", quando.justificativaAjuste());
+        }
+        eventosPendentes.add(new EventoEpisodio(ids.get(), id, tipo, quando.instante(), autorId, d, null));
     }
 
     private static Map<String, String> dados(String... kv) {

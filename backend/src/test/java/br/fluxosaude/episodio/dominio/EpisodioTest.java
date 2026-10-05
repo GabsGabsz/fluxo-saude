@@ -90,22 +90,24 @@ class EpisodioTest {
         void rejeitaEntradaNoFuturo() {
             Instant futuro = t.relogio.instant().plus(Duration.ofMinutes(10));
             assertEquals("DATA_FUTURA", codigoDoErro(() -> Episodio.abrir(
-                    new Episodio.ComandoAbertura(FluxoDeTeste.PACIENTE, FluxoDeTeste.SETOR, futuro),
+                    new Episodio.ComandoAbertura(FluxoDeTeste.PACIENTE, FluxoDeTeste.SETOR,
+                            MomentoInformado.ajustado(futuro, null), null), false,
                     t.fluxo, FluxoDeTeste.AUTOR, t.relogio, t.ids)));
         }
 
         @Test
         void aceitaPequenaDiferencaDeRelogio() {
             Instant quase = t.relogio.instant().plus(Duration.ofSeconds(90));
-            Episodio.abrir(new Episodio.ComandoAbertura(FluxoDeTeste.PACIENTE, FluxoDeTeste.SETOR, quase),
-                    t.fluxo, FluxoDeTeste.AUTOR, t.relogio, t.ids);
+            Episodio.abrir(new Episodio.ComandoAbertura(FluxoDeTeste.PACIENTE, FluxoDeTeste.SETOR,
+                    MomentoInformado.ajustado(quase, null), null), false, t.fluxo, FluxoDeTeste.AUTOR, t.relogio, t.ids);
         }
 
         @Test
         void rejeitaRetroatividadeAcimaDoLimite() {
             Instant antigo = t.relogio.instant().minus(Duration.ofHours(25));
             assertEquals("RETROATIVIDADE_EXCEDIDA", codigoDoErro(() -> Episodio.abrir(
-                    new Episodio.ComandoAbertura(FluxoDeTeste.PACIENTE, FluxoDeTeste.SETOR, antigo),
+                    new Episodio.ComandoAbertura(FluxoDeTeste.PACIENTE, FluxoDeTeste.SETOR,
+                            MomentoInformado.ajustado(antigo, "Registro atrasado"), null), false,
                     t.fluxo, FluxoDeTeste.AUTOR, t.relogio, t.ids)));
         }
     }
@@ -150,7 +152,7 @@ class EpisodioTest {
         void outrosExigeDetalhe() {
             Episodio ep = t.abrirAgora();
             assertEquals("DETALHE_OBRIGATORIO", codigoDoErro(() -> t.mudar(ep, "AGUARDANDO_EXAME_PARECER", "OUTROS")));
-            ep.mudarEtapa(new Episodio.ComandoMudancaEtapa(t.etapa("AGUARDANDO_EXAME_PARECER"), t.relogio.instant(),
+            ep.mudarEtapa(new Episodio.ComandoMudancaEtapa(t.etapa("AGUARDANDO_EXAME_PARECER"), MomentoInformado.agora(t.relogio),
                     new Episodio.MotivoInformado(t.motivo("OUTROS"), "Aguardando familiar trazer exame externo"),
                     null, null), t.fluxo, FluxoDeTeste.AUTOR, t.relogio, t.ids);
             assertEquals("Aguardando familiar trazer exame externo", ep.bloqueio().orElseThrow().detalhe());
@@ -163,7 +165,8 @@ class EpisodioTest {
             t.mudar(ep, "AGUARDANDO_EXAME_PARECER", "AGUARDANDO_EXAME");
             Instant antes = t.relogio.instant().minus(Duration.ofMinutes(30));
             assertEquals("CRONOLOGIA", codigoDoErro(() -> ep.mudarEtapa(
-                    new Episodio.ComandoMudancaEtapa(t.etapa("EM_ATENDIMENTO"), antes, null, null, null),
+                    new Episodio.ComandoMudancaEtapa(t.etapa("EM_ATENDIMENTO"),
+                            MomentoInformado.ajustado(antes, "Registro atrasado"), null, null, null),
                     t.fluxo, FluxoDeTeste.AUTOR, t.relogio, t.ids)));
         }
 
@@ -174,7 +177,7 @@ class EpisodioTest {
             // Protocolo válido + justificativa indevida => deve falhar sem registrar o protocolo
             assertEquals("JUSTIFICATIVA_INDEVIDA", codigoDoErro(() -> ep.mudarEtapa(
                     new Episodio.ComandoMudancaEtapa(t.etapa("AGUARDANDO_SOLICITACAO_TRANSFERENCIA"),
-                            t.relogio.instant(),
+                            MomentoInformado.agora(t.relogio),
                             new Episodio.MotivoInformado(t.motivo("SOLICITACAO_NAO_ENVIADA"), null),
                             new ProtocoloExterno("REGULA_PI", "123"), "não se aplica"),
                     t.fluxo, FluxoDeTeste.AUTOR, t.relogio, t.ids)));
@@ -216,7 +219,7 @@ class EpisodioTest {
             t.mudar(ep, "AGUARDANDO_SOLICITACAO_TRANSFERENCIA", "SOLICITACAO_NAO_ENVIADA");
             t.relogio.avancar(Duration.ofHours(3));
             ep.definirMotivo(new Episodio.MotivoInformado(t.motivo("SEM_LEITO_ESPECIALIDADE"), null),
-                    t.relogio.instant(), t.fluxo, FluxoDeTeste.AUTOR, t.relogio, t.ids);
+                    MomentoInformado.agora(t.relogio), t.fluxo, FluxoDeTeste.AUTOR, t.relogio, t.ids);
             assertEquals(t.relogio.instant(), ep.bloqueio().orElseThrow().desde());
         }
 
@@ -224,7 +227,7 @@ class EpisodioTest {
         void naoRemoveMotivoDeEtapaQueExige() {
             Episodio ep = t.abrirAgora();
             t.mudar(ep, "AGUARDANDO_EXAME_PARECER", "AGUARDANDO_EXAME");
-            assertEquals("RN-003", codigoDoErro(() -> ep.definirMotivo(null, t.relogio.instant(), t.fluxo,
+            assertEquals("RN-003", codigoDoErro(() -> ep.definirMotivo(null, MomentoInformado.agora(t.relogio), t.fluxo,
                     FluxoDeTeste.AUTOR, t.relogio, t.ids)));
         }
 
@@ -262,10 +265,11 @@ class EpisodioTest {
             t.mudar(ep, "ALTA", null);
             assertEquals("EPISODIO_ENCERRADO", codigoDoErro(() -> t.mudar(ep, "EM_ATENDIMENTO", null)));
             assertEquals("EPISODIO_ENCERRADO", codigoDoErro(() -> ep.registrarProtocolo(
-                    new ProtocoloExterno("REGULA_PI", "1"), t.relogio.instant(), t.fluxo, FluxoDeTeste.AUTOR,
+                    new ProtocoloExterno("REGULA_PI", "1"), MomentoInformado.agora(t.relogio), t.fluxo, FluxoDeTeste.AUTOR,
                     t.relogio, t.ids)));
             assertEquals("EPISODIO_ENCERRADO", codigoDoErro(() -> ep.transferirSetor(
-                    java.util.UUID.randomUUID(), t.relogio.instant(), t.fluxo, FluxoDeTeste.AUTOR, t.relogio, t.ids)));
+                    java.util.UUID.randomUUID(), MomentoInformado.agora(t.relogio), t.fluxo, FluxoDeTeste.AUTOR,
+                    t.relogio, t.ids)));
         }
     }
 

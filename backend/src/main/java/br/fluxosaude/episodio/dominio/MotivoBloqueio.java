@@ -12,8 +12,8 @@ public record MotivoBloqueio(UUID id, CategoriaBloqueio categoria, String codigo
         Objects.requireNonNull(categoria);
         Objects.requireNonNull(codigo);
         Objects.requireNonNull(descricao);
-        if (categoria == CategoriaBloqueio.OUTROS && !exigeDetalhe) {
-            throw new IllegalArgumentException("motivo da categoria OUTROS deve exigir detalhe");
+        if ((categoria == CategoriaBloqueio.OUTROS || categoria == CategoriaBloqueio.NAO_DEFINIDA) && !exigeDetalhe) {
+            throw new IllegalArgumentException("motivo das categorias OUTROS e NAO_DEFINIDA deve exigir detalhe");
         }
     }
 }

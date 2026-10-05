@@ -64,4 +64,9 @@ INSERT INTO fluxo.usuario (id, login, nome, senha_hash) VALUES
 INSERT INTO fluxo.lotacao (usuario_id, unidade_id, papel) VALUES
     ('11111111-1111-1111-1111-000000000001', '00000000-0000-0000-0000-00000000000a', 'ADMINISTRADOR'),
     ('11111111-1111-1111-1111-000000000002', '00000000-0000-0000-0000-00000000000a', 'ENFERMAGEM'),
-    ('11111111-1111-1111-1111-000000000003', '00000000-0000-0000-0000-00000000000b', 'COORDENACAO_NIR');
+    ('11111111-1111-1111-1111-000000000003', '00000000-0000-0000-0000-00000000000b', 'COORDENACAO_FLUXO');
+
+-- Unidade A amplia a retroatividade (parâmetro por unidade, RNF-017/RNF-018);
+-- a unidade B mantém o padrão (24 h).
+UPDATE fluxo.unidade SET retroatividade_maxima = interval '48 hours', versao = versao + 1
+ WHERE id = '00000000-0000-0000-0000-00000000000a';

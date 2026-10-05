@@ -2,14 +2,14 @@
 
 Plataforma de gestão operacional do fluxo assistencial: identifica pacientes parados, mede há
 quanto tempo aguardam, registra o gargalo atual, define a próxima ação e o responsável.
-**Não é prontuário e não substitui a regulação oficial.** Especificação: ERS v1.0.
+**Não é prontuário e não substitui a regulação oficial.** Especificação: **ERS v1.1** (revisão técnica).
 
 ## Estado atual — Fundação do MVP (etapa 1)
 
 | Camada | Conteúdo | Verificação |
 |---|---|---|
-| Banco (PostgreSQL 16) | Esquema do núcleo, regras críticas em `CHECK`/triggers, RLS por unidade (inclusive usuários e auditoria), auditoria imutável com cadeia SHA-256, login por funções controladas | `backend/src/test/sql` — 4 suítes + 2 testes de concorrência |
-| Domínio (Java 21, sem framework) | `Episodio`, `Pendencia`, `FluxoConfigurado`, UUIDv7 | 38 testes JUnit, incl. o cenário completo da ERS §11 |
+| Banco (PostgreSQL 16) | Esquema do núcleo, regras críticas em `CHECK`/triggers, RLS por unidade (inclusive usuários e auditoria), auditoria imutável com cadeia SHA-256, login por funções controladas | `backend/src/test/sql` — 6 suítes + 2 testes de concorrência |
+| Domínio (Java 21, sem framework) | `Episodio`, `Pendencia`, `FluxoConfigurado`, ajuste manual de horário, pseudônimo, UUIDv7 | 45 testes JUnit, incl. o cenário completo da ERS §11 |
 | Aplicação (Spring Boot 4.1) | Esqueleto: Flyway com papel dono, datasource com papel restrito, segurança "negar tudo" | `BancoDeDadosIT` (Testcontainers) |
 
 Mapa requisito → código → teste: [`docs/rastreabilidade.md`](docs/rastreabilidade.md).
@@ -21,6 +21,7 @@ Escolhas que precisam de validação com a equipe: [`docs/decisoes-a-validar.md`
 - [ADR-0002](docs/adr/0002-autenticacao-e-sessao.md) — sessão no servidor, Argon2id, CSRF, bloqueio progressivo *(próxima etapa)*
 - [ADR-0003](docs/adr/0003-auditoria-imutavel.md) — auditoria por trigger, imutável, encadeada e redigida
 - [ADR-0004](docs/adr/0004-isolamento-por-unidade.md) — RLS por unidade e mínimo privilégio
+- [ADR-0005](docs/adr/0005-tempo-concorrencia-duplicidade.md) — horário do servidor e ajuste manual, controle otimista, duplicidade sem bloqueio (ERS v1.1)
 
 ## Rodando localmente
 

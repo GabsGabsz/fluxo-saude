@@ -30,7 +30,8 @@ CREATE TYPE fluxo.categoria_bloqueio AS ENUM (
     'LOGISTICA',
     'LEITO_CAPACIDADE',
     'ADMINISTRATIVO',
-    'OUTROS'
+    'OUTROS',
+    'NAO_DEFINIDA'   -- RF-035: causa ainda não definida / em investigação (temporária)
 );
 
 CREATE TABLE fluxo.etapa (
@@ -97,7 +98,7 @@ CREATE TABLE fluxo.motivo_bloqueio (
     UNIQUE (unidade_id, codigo),
     UNIQUE (unidade_id, id),
     -- ERS §4.3: "Outros" somente mediante justificativa livre e auditável.
-    CONSTRAINT motivo_outros_exige_detalhe CHECK (categoria <> 'OUTROS' OR exige_detalhe)
+    CONSTRAINT motivo_outros_exige_detalhe CHECK (categoria NOT IN ('OUTROS', 'NAO_DEFINIDA') OR exige_detalhe)
 );
 
 -- Semântica de uma etapa é imutável (crie outra e desative a antiga); a etapa
@@ -137,6 +138,10 @@ END $$;
 CREATE TRIGGER motivo_imutavel BEFORE UPDATE ON fluxo.motivo_bloqueio
     FOR EACH ROW EXECUTE FUNCTION fluxo.tg_motivo_imutavel();
 
+CREATE TRIGGER etapa_versao BEFORE UPDATE ON fluxo.etapa
+    FOR EACH ROW EXECUTE FUNCTION fluxo.tg_versao();
+CREATE TRIGGER motivo_versao BEFORE UPDATE ON fluxo.motivo_bloqueio
+    FOR EACH ROW EXECUTE FUNCTION fluxo.tg_versao();
 CREATE TRIGGER etapa_atualizado_em BEFORE UPDATE ON fluxo.etapa
     FOR EACH ROW EXECUTE FUNCTION fluxo.tg_atualizado_em();
 CREATE TRIGGER motivo_atualizado_em BEFORE UPDATE ON fluxo.motivo_bloqueio
@@ -149,14 +154,19 @@ CREATE TRIGGER motivo_atualizado_em BEFORE UPDATE ON fluxo.motivo_bloqueio
 -- então invocar esta função para a sua unidade (RLS garante o escopo).
 -- Os valores são ponto de partida e DEVEM ser validados com a equipe (ERS §19).
 -- -----------------------------------------------------------------------------
-CREATE FUNCTION fluxo.provisionar_unidade(p_unidade_id uuid) RETURNS void
+-- p_internacao_encerra (RN-017, RF-015, V-07): numa implantação só na UPA, a
+-- internação encerra o acompanhamento; onde o destino também é monitorado, a
+-- internação é TRANSIÇÃO de cuidado e o episódio continua (etapa não terminal).
+CREATE FUNCTION fluxo.provisionar_unidade(p_unidade_id uuid, p_internacao_encerra boolean DEFAULT true)
+    RETURNS void
     LANGUAGE plpgsql
     SET search_path = pg_catalog
 AS $$
 DECLARE
     v_nao_terminais text[] := ARRAY['EM_ATENDIMENTO','AGUARDANDO_EXAME_PARECER','AGUARDANDO_DECISAO',
         'AGUARDANDO_SOLICITACAO_TRANSFERENCIA','TRANSFERENCIA_SOLICITADA','AGUARDANDO_RECURSO_LEITO',
-        'ACEITO','AGUARDANDO_TRANSPORTE'];
+        'ACEITO','AGUARDANDO_TRANSPORTE']
+        || CASE WHEN p_internacao_encerra THEN '{}'::text[] ELSE ARRAY['INTERNADO'] END;
 BEGIN
     INSERT INTO fluxo.etapa (unidade_id, codigo, nome, ordem, natureza, desfecho, inicial,
                              exige_motivo_bloqueio, exige_protocolo_externo, exige_justificativa)
@@ -170,7 +180,12 @@ BEGIN
         (p_unidade_id, 'ACEITO',                               'Aceito',                                70, 'ACEITO',      NULL, false, false, false, false),
         (p_unidade_id, 'AGUARDANDO_TRANSPORTE',                'Aguardando transporte',                 80, 'TRANSPORTE',  NULL, false, true,  false, false),
         (p_unidade_id, 'TRANSFERIDO',                          'Transferido',                           90, 'DESFECHO', 'TRANSFERENCIA',               false, false, false, false),
-        (p_unidade_id, 'INTERNADO',                            'Internado',                             91, 'DESFECHO', 'INTERNACAO',                  false, false, false, false),
+        (p_unidade_id, 'INTERNADO',
+            CASE WHEN p_internacao_encerra THEN 'Internação (fora do escopo monitorado)' ELSE 'Internado (em acompanhamento)' END,
+            91,
+            CASE WHEN p_internacao_encerra THEN 'DESFECHO' ELSE 'ATENDIMENTO' END::fluxo.natureza_etapa,
+            CASE WHEN p_internacao_encerra THEN 'INTERNACAO' END::fluxo.tipo_desfecho,
+            false, false, false, false),
         (p_unidade_id, 'ALTA',                                 'Alta',                                  92, 'DESFECHO', 'ALTA',                        false, false, false, false),
         (p_unidade_id, 'OBITO',                                'Óbito',                                 93, 'DESFECHO', 'OBITO',                       false, false, false, false),
         (p_unidade_id, 'EVASAO',                               'Evasão',                                94, 'DESFECHO', 'EVASAO',                      false, false, false, true),
@@ -244,9 +259,10 @@ BEGIN
         (p_unidade_id, 'ADMINISTRATIVO',   'DOCUMENTO_PENDENTE',       'Documento obrigatório pendente',      false),
         (p_unidade_id, 'ADMINISTRATIVO',   'CADASTRO_INCOMPLETO',      'Cadastro incompleto',                 false),
         (p_unidade_id, 'ADMINISTRATIVO',   'CONTATO_NAO_REALIZADO',    'Contato não realizado',               false),
-        (p_unidade_id, 'OUTROS',           'OUTROS',                   'Outros (justificar)',                 true)
+        (p_unidade_id, 'OUTROS',           'OUTROS',                   'Outros (justificar)',                 true),
+        (p_unidade_id, 'NAO_DEFINIDA',     'CAUSA_EM_INVESTIGACAO',    'Causa ainda não definida / em investigação', true)
     ON CONFLICT (unidade_id, codigo) DO NOTHING;
 END $$;
 
-REVOKE ALL ON FUNCTION fluxo.provisionar_unidade(uuid) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION fluxo.provisionar_unidade(uuid) TO ${app_role};
+REVOKE ALL ON FUNCTION fluxo.provisionar_unidade(uuid, boolean) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION fluxo.provisionar_unidade(uuid, boolean) TO ${app_role};

@@ -184,7 +184,7 @@ GRANT EXECUTE ON FUNCTION fluxo.credencial_para_login(text),
                           fluxo.lotacoes_para_autenticacao(uuid),
                           fluxo.registrar_tentativa_login(uuid, boolean, integer, interval),
                           fluxo.desbloquear_usuario(uuid),
-                          fluxo.provisionar_unidade(uuid),
+                          fluxo.provisionar_unidade(uuid, boolean),
                           fluxo.cns_valido(text) TO ${app_role};
 
 -- -----------------------------------------------------------------------------
@@ -212,9 +212,11 @@ CREATE TRIGGER auditoria AFTER INSERT OR UPDATE OR DELETE ON fluxo.transicao_eta
 CREATE TRIGGER auditoria AFTER INSERT OR UPDATE OR DELETE ON fluxo.motivo_bloqueio
     FOR EACH ROW EXECUTE FUNCTION auditoria.tg_capturar();
 CREATE TRIGGER auditoria AFTER INSERT OR UPDATE OR DELETE ON fluxo.paciente
-    FOR EACH ROW EXECUTE FUNCTION auditoria.tg_capturar('nome', 'data_nascimento', 'cns', 'identificador_institucional');
+    FOR EACH ROW EXECUTE FUNCTION auditoria.tg_capturar('nome', 'data_nascimento', 'cns', 'identificador_institucional',
+                                           'justificativa_reconciliacao');
 CREATE TRIGGER auditoria AFTER INSERT OR UPDATE OR DELETE ON fluxo.episodio
-    FOR EACH ROW EXECUTE FUNCTION auditoria.tg_capturar('motivo_detalhe', 'destino_descricao', 'justificativa_encerramento');
+    FOR EACH ROW EXECUTE FUNCTION auditoria.tg_capturar('motivo_detalhe', 'destino_descricao', 'justificativa_encerramento',
+                                           'justificativa_duplicidade');
 CREATE TRIGGER auditoria AFTER INSERT OR UPDATE OR DELETE ON fluxo.pendencia
     FOR EACH ROW EXECUTE FUNCTION auditoria.tg_capturar('descricao', 'resolucao');
 

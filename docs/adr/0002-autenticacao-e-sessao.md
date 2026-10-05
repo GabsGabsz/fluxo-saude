@@ -2,7 +2,7 @@
 
 - **Status:** proposto (implementação na próxima etapa)
 - **Data:** 2026-10-05
-- **Requisitos:** RF-001, RNF-001, RNF-002, ERS §16
+- **Requisitos:** RF-001, RNF-001, RNF-002, RNF-013, ERS §16
 
 ## Contexto
 
@@ -32,7 +32,9 @@ credencial compartilhada (ERS §16). SSO institucional pode não existir no iní
    (busca por login, sem RLS, só leitura) e `fluxo.registrar_tentativa_login` (bloqueio
    progressivo + eventos `LOGIN_SUCESSO`, `LOGIN_FALHA`, `CONTA_BLOQUEADA`). O login digitado
    em tentativa de usuário inexistente não é gravado (pode ser uma senha no campo errado).
-9. **SSO (OIDC)** quando a instituição tiver provedor: entra como alternativa de login, sem
+9. **MFA (RNF-013):** TOTP obrigatório para perfis privilegiados (ADMINISTRADOR, AUDITORIA)
+   quando a infraestrutura institucional permitir; opcional para os demais.
+10. **SSO (OIDC)** quando a instituição tiver provedor: entra como alternativa de login, sem
    mudar o modelo de sessão/contexto.
 
 ## Consequências

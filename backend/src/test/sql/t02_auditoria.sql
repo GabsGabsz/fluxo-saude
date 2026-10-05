@@ -21,20 +21,20 @@ SELECT teste.afirma(r.acao = 'CRIAR' AND r.origem = 'BANCO'
    AND r.recurso_id = '22222222-0000-0000-0000-000000000010';
 
 -- UPDATE registra apenas o diff (valor anterior nulo é omitido)
-UPDATE fluxo.paciente SET identificador_institucional = 'PR-123' WHERE id = '22222222-0000-0000-0000-000000000010';
+UPDATE fluxo.paciente SET versao = versao + 1, identificador_institucional = 'PR-123' WHERE id = '22222222-0000-0000-0000-000000000010';
 SELECT teste.afirma((SELECT dados FROM auditoria.registro
                       WHERE recurso = 'fluxo.paciente' AND acao = 'ALTERAR' AND id > (SELECT id FROM marco))
                     = '{"antes": {}, "depois": {"identificador_institucional": "[redigido]"}}'::jsonb,
                     'diff só com campos alterados');
 
 -- UPDATE sem mudança real não gera registro
-UPDATE fluxo.paciente SET nome = nome WHERE id = '22222222-0000-0000-0000-000000000010';
+UPDATE fluxo.paciente SET versao = versao + 1, nome = nome WHERE id = '22222222-0000-0000-0000-000000000010';
 SELECT teste.afirma((SELECT count(*) FROM auditoria.registro
                       WHERE recurso = 'fluxo.paciente' AND id > (SELECT id FROM marco)) = 2,
                     'update sem mudança não audita');
 
 -- Senha e dados pessoais de profissionais nunca vão para o log
-UPDATE fluxo.usuario SET senha_hash = '{argon2@SpringSecurity_v5_8}$argon2id$v=19$m=16384,t=2,p=1$bm92YQ$bm92YQ',
+UPDATE fluxo.usuario SET versao = versao + 1, senha_hash = '{argon2@SpringSecurity_v5_8}$argon2id$v=19$m=16384,t=2,p=1$bm92YQ$bm92YQ',
                          nome = 'Enfermeira A Silva'
  WHERE id = '11111111-1111-1111-1111-000000000002';
 SELECT teste.afirma(dados -> 'depois' ->> 'senha_hash' = '[redigido]' AND dados -> 'depois' ->> 'nome' = '[redigido]',
@@ -108,7 +108,7 @@ SELECT teste.espera_erro($$ SELECT * FROM fluxo.lotacoes_para_autenticacao('1111
 -- Usuários: unidade B não vê nem altera usuário lotado só na A
 SELECT teste.afirma((SELECT count(*) FROM fluxo.usuario WHERE id = '11111111-1111-1111-1111-000000000002') = 0,
                     'B não vê usuário da A');
-UPDATE fluxo.usuario SET senha_hash = '{noop}xxxxxxxxxxxxxxxxxxxxxxxxxx' WHERE id = '11111111-1111-1111-1111-000000000001';
+UPDATE fluxo.usuario SET versao = versao + 1, senha_hash = '{noop}xxxxxxxxxxxxxxxxxxxxxxxxxx' WHERE id = '11111111-1111-1111-1111-000000000001';
 SELECT teste.ctx('11111111-1111-1111-1111-000000000001', '00000000-0000-0000-0000-00000000000a');
 SELECT teste.afirma((SELECT senha_hash NOT LIKE '{noop}%' FROM fluxo.usuario WHERE id = '11111111-1111-1111-1111-000000000001'),
                     'B não troca senha de usuário da A');
