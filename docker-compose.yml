@@ -1,7 +1,7 @@
 # Ambiente de DESENVOLVIMENTO local. Copie .env.example para .env e defina senhas.
 services:
   postgres:
-    image: postgres:16-alpine
+    image: postgres:18-alpine
     restart: unless-stopped
     environment:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina no .env}
