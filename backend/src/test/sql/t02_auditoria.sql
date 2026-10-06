@@ -34,15 +34,14 @@ SELECT teste.afirma((SELECT count(*) FROM auditoria.registro
                     'update sem mudança não audita');
 
 -- Senha e dados pessoais de profissionais nunca vão para o log
-UPDATE fluxo.usuario SET versao = versao + 1, nome = 'Enfermeira A Silva'
- WHERE id = '11111111-1111-1111-1111-000000000002';
+SELECT fluxo.admin_alterar_conta('11111111-1111-1111-1111-000000000002', 0, 'Enfermeira A Silva', NULL, NULL);
 SELECT teste.ctx('11111111-1111-1111-1111-000000000002', NULL);   -- a própria enfermeira troca a senha
 SELECT fluxo.alterar_senha_propria('{argon2@SpringSecurity_v5_8}$argon2id$v=19$m=16384,t=2,p=1$bm92YQ$bm92YQ');
 SELECT teste.ctx('11111111-1111-1111-1111-000000000001', '00000000-0000-0000-0000-00000000000a');
 SELECT teste.afirma(bool_and(coalesce(dados -> 'depois' ->> 'senha_hash', '[redigido]') = '[redigido]'
                          AND coalesce(dados -> 'depois' ->> 'nome', '[redigido]') = '[redigido]')
                     AND count(*) = 2, 'hash de senha e nome redigidos')
-  FROM teste.auditoria_desde((SELECT id FROM marco)) WHERE recurso = 'fluxo.usuario';
+  FROM teste.auditoria_desde((SELECT id FROM marco)) WHERE recurso = 'fluxo.usuario' AND acao = 'ALTERAR';
 
 -- Escrita sem usuário no contexto é recusada (falha fechada)
 SELECT set_config('fluxo.usuario_id', '', true);
@@ -111,7 +110,10 @@ SELECT teste.espera_erro($$ SELECT * FROM fluxo.lotacoes_para_autenticacao('1111
 -- Usuários: unidade B não vê nem altera usuário lotado só na A
 SELECT teste.afirma((SELECT count(*) FROM fluxo.usuario WHERE id = '11111111-1111-1111-1111-000000000002') = 0,
                     'B não vê usuário da A');
-UPDATE fluxo.usuario SET versao = versao + 1, nome = 'Hack' WHERE id = '11111111-1111-1111-1111-000000000001';
+SELECT teste.espera_erro($$ UPDATE fluxo.usuario SET versao = versao + 1, nome = 'Hack'
+                              WHERE id = '11111111-1111-1111-1111-000000000001' $$, 'permission denied');
+SELECT teste.espera_erro($$ SELECT fluxo.admin_alterar_conta('11111111-1111-1111-1111-000000000001', 0, 'Hack', NULL, NULL) $$,
+                         'exige administrador');
 SELECT teste.ctx('11111111-1111-1111-1111-000000000001', '00000000-0000-0000-0000-00000000000a');
 SELECT teste.afirma((SELECT nome <> 'Hack' FROM fluxo.usuario WHERE id = '11111111-1111-1111-1111-000000000001'),
                     'B não altera usuário da A');

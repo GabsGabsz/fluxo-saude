@@ -21,8 +21,9 @@ VALUES (:'unidade_codigo', :'unidade_nome', :'unidade_tipo'::fluxo.tipo_unidade)
 SELECT fluxo.provisionar_unidade(id, :'internacao_encerra'::boolean)
   FROM fluxo.unidade WHERE codigo = :'unidade_codigo';
 
-INSERT INTO fluxo.usuario (login, nome, senha_hash, deve_trocar_senha)
-VALUES (lower(:'admin_login'), :'admin_nome', :'admin_hash', true);
+INSERT INTO fluxo.usuario (login, nome, senha_hash, deve_trocar_senha, unidade_gestora_id)
+SELECT lower(:'admin_login'), :'admin_nome', :'admin_hash', true, un.id
+  FROM fluxo.unidade un WHERE un.codigo = :'unidade_codigo';
 
 INSERT INTO fluxo.lotacao (usuario_id, unidade_id, papel)
 SELECT u.id, un.id, 'ADMINISTRADOR'

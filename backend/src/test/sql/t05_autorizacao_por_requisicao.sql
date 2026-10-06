@@ -23,8 +23,11 @@ SELECT teste.espera_erro($$ SELECT senha_hash FROM fluxo.usuario $$, 'permission
 SELECT teste.espera_erro($$ UPDATE fluxo.usuario SET senha_hash = 'x', versao = versao + 1 WHERE id = '11111111-1111-1111-1111-000000000002' $$,
                          'permission denied');
 SELECT teste.afirma((SELECT count(*) FROM fluxo.usuario) = 2, 'cadastro (sem hash) visível na unidade');
--- Admin pode exigir troca de senha e desativar (colunas permitidas)
-UPDATE fluxo.usuario SET deve_trocar_senha = true, versao = versao + 1 WHERE id = :ENF;
+-- Admin exige troca de senha e desativa SÓ pelas funções administrativas (V11: sem DML direto)
+SELECT teste.espera_erro(format($$ UPDATE fluxo.usuario SET deve_trocar_senha = true, versao = versao + 1 WHERE id = %L $$, :ENF),
+                         'permission denied');
+SELECT fluxo.admin_definir_senha_provisoria(:ENF, (SELECT versao FROM fluxo.usuario WHERE id = :ENF),
+       '{argon2@SpringSecurity_v5_8}$argon2id$v=19$m=16384,t=2,p=1$cHJvdmlzb3JpYQ$cHJvdmlzb3JpYQ');
 
 -- Troca da própria senha
 SELECT teste.ctx(:ENF, NULL);
@@ -37,7 +40,7 @@ SELECT teste.espera_erro($$ SELECT fluxo.alterar_senha_propria('x') $$, 'context
 
 -- Desativação revoga o acesso já na transação seguinte
 SELECT teste.ctx('11111111-1111-1111-1111-000000000001', '00000000-0000-0000-0000-00000000000a');
-UPDATE fluxo.usuario SET ativo = false, versao = versao + 1 WHERE id = :ENF;
+SELECT fluxo.admin_definir_situacao(:ENF, (SELECT versao FROM fluxo.usuario WHERE id = :ENF), false);
 SELECT teste.afirma(fluxo.aplicar_contexto(:ENF, :A, NULL, NULL) IS NULL, 'usuário desativado perde o contexto');
 
 -- Tentativa em conta bloqueada é auditada sem contexto
