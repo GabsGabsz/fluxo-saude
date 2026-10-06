@@ -82,10 +82,25 @@ operação é recusada (403/422) e a unidade nunca fica sem administrador.
 
 ### 7. Sessões
 
-Após o COMMIT de mudança de papéis, desativação ou senha provisória, as sessões do usuário são
-removidas do Spring Session (índice por ID do usuário). É reforço: mesmo sem isso,
-`fluxo.aplicar_contexto` revalida usuário, lotação e papéis a cada transação (ADR-0002 §7) e
-a sessão antiga recebe 401 na requisição seguinte.
+A recusa da sessão antiga **não depende** da remoção física (V12, revisão do PR #6):
+
+- cada conta tem uma **versão de credencial**, lida junto com o hash no login, guardada na
+  sessão e conferida por `fluxo.aplicar_contexto` em **toda** transação (além de conta ativa,
+  lotação e papéis). Ela muda com troca da própria senha, senha provisória, desativação/
+  reativação e alteração de papéis pela administração — e também quando o DBA altera senha,
+  situação ou remove/troca lotação direto no banco (gatilhos). Nunca regride;
+- **login concorrente com redefinição**: a primeira transação do login com o usuário no
+  contexto (leitura do perfil) já confere a versão lida junto com o hash; se a senha mudou
+  durante a verificação, o login é recusado sem sucesso auditado. Se mudar depois, a sessão
+  nasce com a versão antiga e é recusada na requisição seguinte;
+- **troca da própria senha** é condicionada à versão da sessão (`alterar_senha_propria(hash,
+  versão)`): duas trocas simultâneas, ou troca × redefinição, nunca se sobrescrevem; a
+  perdedora não grava nada e sua sessão é revogada. A sessão de quem trocou passa à versão nova;
+- depois do COMMIT, as sessões ainda são removidas do Spring Session (reforço). Se a remoção
+  falhar, a operação continua válida e a sessão sobrevivente recebe 401 `SESSAO_REVOGADA`.
+
+Consequência de implantação: sessões criadas antes da V12 não têm versão (0) e são recusadas —
+todos entram de novo uma vez.
 
 ## Consequências
 

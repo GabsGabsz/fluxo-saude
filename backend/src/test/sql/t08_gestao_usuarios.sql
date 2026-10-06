@@ -107,7 +107,7 @@ SELECT teste.afirma((SELECT array_agg(papel::text) FROM fluxo.lotacao WHERE usua
 SELECT teste.afirma(NOT fluxo.pode_administrar_conta(:ENF), 'B não gere conta de outra unidade gestora');
 SELECT teste.espera_erro(format($$ SELECT fluxo.admin_definir_senha_provisoria(%L, %s, %L) $$, :ENF, :v_enf + 2, :HASH),
                          'fora do alcance');
-SELECT teste.afirma(fluxo.aplicar_contexto(:ENF, :A, NULL, NULL) IS NULL, 'sessão na A perde o contexto');
+SELECT teste.afirma(fluxo.aplicar_contexto(:ENF, :A, NULL, NULL, (SELECT credencial_versao FROM fluxo.usuario WHERE id = :ENF)) IS NULL, 'sessão na A perde o contexto');
 
 -- ---------------------------------------------------------------- conta órfã não é "adotável"
 SELECT teste.ctx(:ADM_B, :B);
@@ -132,7 +132,7 @@ SELECT teste.afirma(fluxo.admin_alterar_conta(:NOVO, 2, 'Novo Nome', 'novo@upa.b
 SELECT teste.afirma(fluxo.admin_definir_senha_provisoria(:NOVO, 2, :HASH) = 3, 'senha provisória definida');
 SELECT teste.afirma(deve_trocar_senha, 'troca obrigatória') FROM fluxo.usuario WHERE id = :NOVO;
 SELECT teste.afirma(fluxo.admin_definir_situacao(:NOVO, 3, false) = 4, 'conta desativada');
-SELECT teste.afirma(fluxo.aplicar_contexto(:NOVO, :A, NULL, NULL) IS NULL, 'conta desativada perde o contexto');
+SELECT teste.afirma(fluxo.aplicar_contexto(:NOVO, :A, NULL, NULL, (SELECT credencial_versao FROM fluxo.usuario WHERE id = :NOVO)) IS NULL, 'conta desativada perde o contexto');
 SELECT teste.ctx(:ADM_A, :A);
 SELECT teste.afirma(fluxo.admin_definir_situacao(:NOVO, 4, true) = 5, 'conta reativada');
 

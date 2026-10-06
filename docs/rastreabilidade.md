@@ -56,7 +56,7 @@ Baseline: **ERS v1.1 (revisão técnica)**. Legenda: ✅ implementado e testado 
 
 | RNF | Status |
 |---|---|
-| RNF-013 Credenciais (hash, MFA, sem compartilhamento) | 🟡 Argon2id + política NIST + bloqueio progressivo + limite de sessões ✅; credencial individual provisionada pelo administrador com senha provisória aleatória e troca obrigatória ✅; MFA ⬜ |
+| RNF-013 Credenciais (hash, MFA, sem compartilhamento) | 🟡 Argon2id + política NIST + bloqueio progressivo + limite de sessões ✅; credencial individual provisionada pelo administrador com senha provisória aleatória e troca obrigatória ✅; versão de credencial conferida em toda transação — sessão antiga recusada após troca/redefinição de senha mesmo sem remoção física, login concorrente recusado (V12; `t09`, `o03`, `concorrencia-credencial`, `ServicoAutenticacaoTest`, `SessaoSobreviventeIT`) ✅; MFA ⬜ |
 | RNF-014 Concorrência | ✅ `tg_versao` |
 | RNF-015 Privacidade visual | 🟡 `Pseudonimo`; tela ⬜ |
 | RNF-016 Acessibilidade (eMAG/WCAG) | ⬜ front-end |

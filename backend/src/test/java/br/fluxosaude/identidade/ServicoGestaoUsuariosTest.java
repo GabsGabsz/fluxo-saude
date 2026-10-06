@@ -236,7 +236,7 @@ class ServicoGestaoUsuariosTest {
     static UsuarioAutenticado sessao(Conta c, UUID unidade) {
         Map<UUID, Set<Papel>> lot = new HashMap<>();
         c.lotacoes.forEach((u, p) -> lot.put(u, Set.copyOf(p)));
-        return new UsuarioAutenticado(c.id, c.login, c.nome, lot, unidade, false);
+        return new UsuarioAutenticado(c.id, c.login, c.nome, lot, unidade, false, 1);
     }
 
     static String erro(Executable e) {

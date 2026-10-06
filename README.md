@@ -8,12 +8,12 @@ quanto tempo aguardam, registra o gargalo atual, define a próxima ação e o re
 
 | Camada | Conteúdo | Verificação |
 |---|---|---|
-| Banco (PostgreSQL 16) | Esquema do núcleo, regras críticas em `CHECK`/triggers, RLS por unidade (inclusive usuários e auditoria), auditoria imutável com cadeia SHA-256, login por funções controladas, observações (V9), margem de relógio (V10), gestão de usuários só por funções com alcance conferido (V11) | `backend/src/test/sql` — 10 suítes + 3 testes de concorrência |
+| Banco (PostgreSQL 16) | Esquema do núcleo, regras críticas em `CHECK`/triggers, RLS por unidade (inclusive usuários e auditoria), auditoria imutável com cadeia SHA-256, login por funções controladas, observações (V9), margem de relógio (V10), gestão de usuários só por funções com alcance conferido (V11), versão de credencial conferida em toda transação (V12) | `backend/src/test/sql` — 12 suítes + 4 testes de concorrência |
 | Domínio (Java 21, sem framework) | `Episodio`, `Pendencia`, `FluxoConfigurado`, ajuste manual de horário, pseudônimo, UUIDv7 | 45 testes JUnit, incl. o cenário completo da ERS §11 |
 | Identidade (núcleo puro) | Política de senha, limitadores, matriz de permissões, serviço de autenticação | `ServicoAutenticacaoTest`, `MatrizPermissoesTest`, ... |
 | Casos de uso (núcleo puro) | `ServicoEpisodios`, `ServicoPendencias`, `ServicoConsultas`: permissão na unidade ativa, versão lida (409), ajuste manual de horário, painel pseudonimizado | `ServicosDeAplicacaoTest` (portas em memória) |
 | Gestão de usuários (núcleo puro) | `ServicoGestaoUsuarios`: alcance de lotação × alcance de conta, sem autoalteração, senha provisória, encerramento de sessões | `ServicoGestaoUsuariosTest` |
-| Aplicação (Spring Boot 4.1) | Login/sessão no servidor, CSRF SPA, revalidação no banco por transação, API REST de episódios/pendências/Torre e administração de usuários, erros padronizados; migração em job separado | `SessaoIT`, `EpisodiosIT` (cenário ERS §11 via HTTP), `GestaoUsuariosIT`, `BancoDeDadosIT` (Testcontainers) |
+| Aplicação (Spring Boot 4.1) | Login/sessão no servidor, CSRF SPA, revalidação no banco por transação, API REST de episódios/pendências/Torre e administração de usuários, erros padronizados; migração em job separado | `SessaoIT`, `EpisodiosIT` (cenário ERS §11 via HTTP), `GestaoUsuariosIT`, `SessaoSobreviventeIT`, `BancoDeDadosIT` (Testcontainers) |
 
 Mapa requisito → código → teste: [`docs/rastreabilidade.md`](docs/rastreabilidade.md).
 Escolhas que precisam de validação com a equipe: [`docs/decisoes-a-validar.md`](docs/decisoes-a-validar.md).
@@ -142,7 +142,7 @@ backend/
     episodio/web/         API REST
     identidade/           login, sessão, permissões (mesma divisão)
     configuracao/         Spring (relógio, segurança, montagem dos módulos)
-  src/main/resources/db/migration/   V1..V11 (Flyway)
+  src/main/resources/db/migration/   V1..V12 (Flyway)
   src/test/java/          testes de domínio, arquitetura e integração
   src/test/sql/           testes das garantias do banco
 infra/db/init/            bootstrap de papéis/banco (dev, testes e referência p/ DBA)

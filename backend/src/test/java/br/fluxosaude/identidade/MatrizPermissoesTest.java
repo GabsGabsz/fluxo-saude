@@ -63,21 +63,24 @@ class MatrizPermissoesTest {
         UUID a = UUID.randomUUID();
         UUID b = UUID.randomUUID();
         UsuarioAutenticado u = new UsuarioAutenticado(UUID.randomUUID(), "ana", "Ana",
-                Map.of(a, Set.of(Papel.ENFERMAGEM), b, Set.of(Papel.TRANSPORTE)), a, false);
+                Map.of(a, Set.of(Papel.ENFERMAGEM), b, Set.of(Papel.TRANSPORTE)), a, false, 1);
         assertTrue(u.pode(Permissao.EPISODIO_VER));
         assertFalse(u.comUnidadeAtiva(b).pode(Permissao.EPISODIO_VER));
         assertThrows(IllegalArgumentException.class, () -> u.comUnidadeAtiva(UUID.randomUUID()));
-        UsuarioAutenticado pendente = new UsuarioAutenticado(u.usuarioId(), "ana", "Ana", u.lotacoes(), a, true);
+        UsuarioAutenticado pendente = new UsuarioAutenticado(u.usuarioId(), "ana", "Ana", u.lotacoes(), a, true, 1);
         assertFalse(pendente.pode(Permissao.EPISODIO_VER));
         assertThrows(AcessoNegadoException.class, () -> AcessoNegadoException.exigir(pendente, Permissao.EPISODIO_VER));
-        assertTrue(pendente.senhaTrocada().pode(Permissao.EPISODIO_VER));
+        UsuarioAutenticado trocada = pendente.senhaTrocada(2);
+        assertTrue(trocada.pode(Permissao.EPISODIO_VER));
+        assertEquals(2, trocada.credencialVersao(), "sessão atual passa à nova versão de credencial");
+        assertEquals(2, trocada.comUnidadeAtiva(b).credencialVersao(), "troca de unidade preserva a versão");
     }
 
     @Test
     void principalNaoExpoeDadosPessoais() {
         UUID id = UUID.randomUUID();
         UUID a = UUID.randomUUID();
-        UsuarioAutenticado u = new UsuarioAutenticado(id, "ana.souza", "Ana Souza", Map.of(a, Set.of(Papel.MEDICO)), a, false);
+        UsuarioAutenticado u = new UsuarioAutenticado(id, "ana.souza", "Ana Souza", Map.of(a, Set.of(Papel.MEDICO)), a, false, 1);
         assertEquals(id.toString(), u.getName());
         assertFalse(u.toString().contains("Ana"));
         assertFalse(u.toString().contains("ana.souza"));

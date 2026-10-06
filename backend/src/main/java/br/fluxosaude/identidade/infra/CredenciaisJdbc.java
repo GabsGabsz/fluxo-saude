@@ -3,6 +3,7 @@ package br.fluxosaude.identidade.infra;
 import br.fluxosaude.identidade.aplicacao.ContextoOrigem;
 import br.fluxosaude.identidade.aplicacao.CredenciaisPort;
 import br.fluxosaude.identidade.dominio.Papel;
+import br.fluxosaude.identidade.dominio.SessaoRevogadaException;
 import br.fluxosaude.infra.persistencia.ContextoRequisicao;
 import br.fluxosaude.infra.persistencia.ExecutorTransacional;
 import java.time.Duration;
@@ -32,13 +33,13 @@ public final class CredenciaisJdbc implements CredenciaisPort {
     @Override
     public Optional<Credencial> buscarPorLogin(String login, ContextoOrigem origem) {
         return executor.executar(ContextoRequisicao.anonimo(origem), jdbc -> jdbc.sql("""
-                    SELECT usuario_id, senha_hash, ativo, deve_trocar_senha, bloqueado_ate
+                    SELECT usuario_id, senha_hash, ativo, deve_trocar_senha, bloqueado_ate, credencial_versao
                       FROM fluxo.credencial_para_login(?)
                     """)
                 .param(login)
                 .query((rs, n) -> new Credencial(
                         rs.getObject(1, UUID.class), rs.getString(2), rs.getBoolean(3), rs.getBoolean(4),
-                        instante(rs.getObject(5, OffsetDateTime.class))))
+                        instante(rs.getObject(5, OffsetDateTime.class)), rs.getInt(6)))
                 .optional());
     }
 
@@ -79,8 +80,8 @@ public final class CredenciaisJdbc implements CredenciaisPort {
     }
 
     @Override
-    public Perfil perfil(UUID usuarioId, ContextoOrigem origem) {
-        return executor.executar(ContextoRequisicao.proprioUsuario(usuarioId, origem), jdbc -> jdbc.sql("""
+    public Perfil perfil(UUID usuarioId, int credencialVersao, ContextoOrigem origem) {
+        return executor.executar(ContextoRequisicao.proprioUsuario(usuarioId, credencialVersao, origem), jdbc -> jdbc.sql("""
                     SELECT login::text, nome FROM fluxo.usuario WHERE id = ?::uuid
                     """)
                 .param(usuarioId.toString())
@@ -98,8 +99,8 @@ public final class CredenciaisJdbc implements CredenciaisPort {
     }
 
     @Override
-    public void registrarFalhaNaTrocaDeSenha(UUID usuarioId, ContextoOrigem origem) {
-        executor.executar(ContextoRequisicao.proprioUsuario(usuarioId, origem), jdbc -> jdbc
+    public void registrarFalhaNaTrocaDeSenha(UUID usuarioId, int credencialVersao, ContextoOrigem origem) {
+        executor.executar(ContextoRequisicao.proprioUsuario(usuarioId, credencialVersao, origem), jdbc -> jdbc
                 .sql("SELECT auditoria.registrar('SENHA_ATUAL_INCORRETA', 'autenticacao')")
                 .query(Long.class)
                 .single());
@@ -107,23 +108,27 @@ public final class CredenciaisJdbc implements CredenciaisPort {
 
     /** O hash não é legível por SELECT direto (V8): função que devolve só o do próprio usuário. */
     @Override
-    public String hashAtual(UUID usuarioId, ContextoOrigem origem) {
-        return executor.executar(ContextoRequisicao.proprioUsuario(usuarioId, origem), jdbc -> jdbc
+    public String hashAtual(UUID usuarioId, int credencialVersao, ContextoOrigem origem) {
+        return executor.executar(ContextoRequisicao.proprioUsuario(usuarioId, credencialVersao, origem), jdbc -> jdbc
                 .sql("SELECT fluxo.hash_senha_propria()")
                 .query(String.class)
                 .single());
     }
 
     @Override
-    public void gravarNovaSenha(UUID usuarioId, String novoHash, ContextoOrigem origem) {
-        Boolean ok = executor.executar(ContextoRequisicao.proprioUsuario(usuarioId, origem), jdbc -> jdbc
-                .sql("SELECT fluxo.alterar_senha_propria(?)")
-                .param(novoHash)
-                .query(Boolean.class)
-                .single());
-        if (!Boolean.TRUE.equals(ok)) {
-            throw new IllegalStateException("troca de senha não aplicada");
+    public int gravarNovaSenha(UUID usuarioId, int credencialVersao, String novoHash, ContextoOrigem origem) {
+        // Condicionada à versão da sessão (V12): se outra troca/redefinição foi confirmada antes,
+        // nada é gravado e a sessão é tratada como revogada.
+        int nova = executor.executar(ContextoRequisicao.proprioUsuario(usuarioId, credencialVersao, origem),
+                jdbc -> jdbc.sql("SELECT coalesce(fluxo.alterar_senha_propria(?, ?), 0)")
+                        .param(novoHash)
+                        .param(credencialVersao)
+                        .query(Integer.class)
+                        .single());
+        if (nova < 1) {                    // NULL do banco: versão da sessão já não é a vigente
+            throw new SessaoRevogadaException();
         }
+        return nova;
     }
 
     private static Instant instante(OffsetDateTime t) {

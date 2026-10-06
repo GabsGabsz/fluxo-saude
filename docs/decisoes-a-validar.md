@@ -30,6 +30,7 @@ unidade**, não regras fixas (RN-014, Anexo B.3). Cada item indica a validação
 | 22 | Administrador pode conceder qualquer papel da unidade, inclusive Administrador e papéis com acesso nominal (ex.: Coordenação). Segregação de funções (ex.: dupla aprovação) não implementada — depende de processo institucional | V11 | V-06, V-08 |
 | 23 | Remover a última lotação **desativa** a conta; conta órfã só é reativada pelo DBA; vínculo entre unidades só de conta ativa, localizada pelo login exato; revogar o acesso na unidade gestora encerra a gestão da conta pela aplicação (DBA a partir daí) | V11 | V-06 |
 | 24 | Senha provisória gerada pelo sistema e exibida uma vez ao administrador, que a entrega ao profissional por canal seguro (procedimento institucional a definir) | `GeradorSenhaProvisoria` | V-10 |
+| 26 | Encerram todas as sessões do usuário: troca da própria senha (exceto a sessão que trocou), senha provisória, desativação/reativação e alteração de papéis em qualquer unidade; a implantação da V12 encerra todas as sessões existentes uma vez | V12 | V-10 |
 | 25 | **Limitação conhecida:** o contexto da transação (GUCs) pode ser definido pelo próprio papel da aplicação; as regras do banco não resistem a SQL arbitrário como `fluxo_app`. Proposta: contexto não forjável (etapa própria, afeta todas as políticas) | V1/V8 | V-10 |
 
 **Não decidido, e não deve ser decidido pelo desenvolvedor:** limites de alerta e SLA por etapa

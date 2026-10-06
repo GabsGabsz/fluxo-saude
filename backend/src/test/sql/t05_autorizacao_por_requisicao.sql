@@ -4,18 +4,18 @@ BEGIN;
 \set ENF '''11111111-1111-1111-1111-000000000002'''
 
 -- Contexto válido devolve os papéis vigentes e aplica o RLS
-SELECT teste.afirma(fluxo.aplicar_contexto(:ENF, :A, '10.0.0.9', 'corr-1') = ARRAY['ENFERMAGEM'], 'papéis vigentes');
+SELECT teste.afirma(fluxo.aplicar_contexto(:ENF, :A, '10.0.0.9', 'corr-1', 1) = ARRAY['ENFERMAGEM'], 'papéis vigentes');
 SELECT teste.afirma(current_setting('fluxo.unidade_ids') = '00000000-0000-0000-0000-00000000000a', 'contexto aplicado');
 SELECT teste.afirma((SELECT count(*) FROM fluxo.etapa) > 0, 'RLS liberado para a unidade');
 
 -- Unidade onde não está lotado: NULL (contexto recusado) e nada é aplicado
 SELECT teste.ctx(NULL, NULL);
-SELECT teste.afirma(fluxo.aplicar_contexto(:ENF, '00000000-0000-0000-0000-00000000000b', NULL, NULL) IS NULL, 'sem lotação');
+SELECT teste.afirma(fluxo.aplicar_contexto(:ENF, '00000000-0000-0000-0000-00000000000b', NULL, NULL, 1) IS NULL, 'sem lotação');
 SELECT teste.afirma(coalesce(current_setting('fluxo.usuario_id', true), '') = '', 'contexto não aplicado');
 -- Usuário inexistente
-SELECT teste.afirma(fluxo.aplicar_contexto(gen_random_uuid(), :A, NULL, NULL) IS NULL, 'usuário inexistente');
+SELECT teste.afirma(fluxo.aplicar_contexto(gen_random_uuid(), :A, NULL, NULL, 1) IS NULL, 'usuário inexistente');
 -- Sem unidade (operações sobre o próprio cadastro): lista vazia
-SELECT teste.afirma(fluxo.aplicar_contexto(:ENF, NULL, NULL, NULL) = '{}'::text[], 'contexto do próprio usuário');
+SELECT teste.afirma(fluxo.aplicar_contexto(:ENF, NULL, NULL, NULL, 1) = '{}'::text[], 'contexto do próprio usuário');
 
 -- Hash de senha: nem leitura nem escrita direta pela aplicação
 SELECT teste.ctx('11111111-1111-1111-1111-000000000001', '00000000-0000-0000-0000-00000000000a');
@@ -32,16 +32,18 @@ SELECT fluxo.admin_definir_senha_provisoria(:ENF, (SELECT versao FROM fluxo.usua
 -- Troca da própria senha
 SELECT teste.ctx(:ENF, NULL);
 SELECT teste.afirma(fluxo.hash_senha_propria() LIKE '{argon2%', 'lê o próprio hash');
-SELECT teste.afirma(fluxo.alterar_senha_propria('{argon2@SpringSecurity_v5_8}$argon2id$v=19$m=19456,t=2,p=1$bm92YQ$bm92YTI'),
+SELECT teste.afirma(fluxo.alterar_senha_propria('{argon2@SpringSecurity_v5_8}$argon2id$v=19$m=19456,t=2,p=1$bm92YQ$bm92YTI',
+                                                (SELECT credencial_versao FROM fluxo.usuario WHERE id = :ENF)) IS NOT NULL,
                     'troca a própria senha');
 SELECT teste.ctx(NULL, NULL);
 SELECT teste.afirma(NOT deve_trocar_senha, 'troca retira a exigência') FROM fluxo.credencial_para_login('enf.a');
-SELECT teste.espera_erro($$ SELECT fluxo.alterar_senha_propria('x') $$, 'contexto de usuário ausente');
+SELECT teste.espera_erro($$ SELECT fluxo.alterar_senha_propria('x', 1) $$, 'contexto de usuário ausente');
 
 -- Desativação revoga o acesso já na transação seguinte
 SELECT teste.ctx('11111111-1111-1111-1111-000000000001', '00000000-0000-0000-0000-00000000000a');
 SELECT fluxo.admin_definir_situacao(:ENF, (SELECT versao FROM fluxo.usuario WHERE id = :ENF), false);
-SELECT teste.afirma(fluxo.aplicar_contexto(:ENF, :A, NULL, NULL) IS NULL, 'usuário desativado perde o contexto');
+SELECT teste.afirma(fluxo.aplicar_contexto(:ENF, :A, NULL, NULL, (SELECT credencial_versao FROM fluxo.usuario WHERE id = :ENF)) IS NULL,
+                    'usuário desativado perde o contexto');
 
 -- Tentativa em conta bloqueada é auditada sem contexto
 SELECT teste.ctx(NULL, NULL);

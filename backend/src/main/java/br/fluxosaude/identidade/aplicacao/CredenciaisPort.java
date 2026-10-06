@@ -10,7 +10,9 @@ import java.util.UUID;
 /** Porta de persistência das credenciais (implementada sobre as funções do banco, V6). */
 public interface CredenciaisPort {
 
-    record Credencial(UUID usuarioId, String senhaHash, boolean ativo, boolean deveTrocarSenha, Instant bloqueadoAte) {
+    /** {@code credencialVersao} vem na MESMA leitura do hash (V12). */
+    record Credencial(UUID usuarioId, String senhaHash, boolean ativo, boolean deveTrocarSenha, Instant bloqueadoAte,
+                      int credencialVersao) {
     }
 
     record Perfil(String login, String nome) {
@@ -26,17 +28,24 @@ public interface CredenciaisPort {
     void registrarTentativaDuranteBloqueio(UUID usuarioId, ContextoOrigem origem);
 
     /** Audita senha atual incorreta na troca de senha (executa como o próprio usuário). */
-    void registrarFalhaNaTrocaDeSenha(UUID usuarioId, ContextoOrigem origem);
+    void registrarFalhaNaTrocaDeSenha(UUID usuarioId, int credencialVersao, ContextoOrigem origem);
 
     /** Lotações em unidades ativas. */
     Map<UUID, Set<Papel>> lotacoes(UUID usuarioId, ContextoOrigem origem);
 
-    /** Dados de exibição do próprio usuário (executa com o usuário no contexto). */
-    Perfil perfil(UUID usuarioId, ContextoOrigem origem);
+    /**
+     * Dados de exibição do próprio usuário (executa com o usuário no contexto). Lança
+     * {@code SessaoRevogadaException} se a versão de credencial não for mais a vigente.
+     */
+    Perfil perfil(UUID usuarioId, int credencialVersao, ContextoOrigem origem);
 
     /** Hash atual do próprio usuário (para confirmar a senha atual na troca). */
-    String hashAtual(UUID usuarioId, ContextoOrigem origem);
+    String hashAtual(UUID usuarioId, int credencialVersao, ContextoOrigem origem);
 
-    /** Grava novo hash do próprio usuário e retira a exigência de troca. */
-    void gravarNovaSenha(UUID usuarioId, String novoHash, ContextoOrigem origem);
+    /**
+     * Grava novo hash do próprio usuário e retira a exigência de troca, SÓ se a versão de
+     * credencial da sessão ainda for a vigente (senão {@code SessaoRevogadaException}). Devolve
+     * a nova versão (as demais sessões do usuário passam a ser recusadas pelo banco).
+     */
+    int gravarNovaSenha(UUID usuarioId, int credencialVersao, String novoHash, ContextoOrigem origem);
 }

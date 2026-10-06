@@ -59,7 +59,7 @@ class ServicosDeAplicacaoTest {
 
     static UsuarioAutenticado usuario(Papel papel) {
         return new UsuarioAutenticado(UUID.randomUUID(), "u." + papel.name().toLowerCase(), "Usuário",
-                Map.of(FluxoDeTeste.UNIDADE, Set.of(papel)), FluxoDeTeste.UNIDADE, false);
+                Map.of(FluxoDeTeste.UNIDADE, Set.of(papel)), FluxoDeTeste.UNIDADE, false, 1);
     }
 
     static String erro(Executable e) {

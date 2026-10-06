@@ -48,4 +48,5 @@ done
 if DB="$DB" "$DIR/concorrencia-auditoria.sh" 8 25; then echo "PASSOU  concorrencia-auditoria"; else echo "FALHOU  concorrencia-auditoria"; falhas=$((falhas+1)); fi
 if DB="$DB" "$DIR/concorrencia-desfecho.sh"; then echo "PASSOU  concorrencia-desfecho"; else echo "FALHOU  concorrencia-desfecho"; falhas=$((falhas+1)); fi
 if DB="$DB" "$DIR/concorrencia-administradores.sh"; then echo "PASSOU  concorrencia-administradores"; else echo "FALHOU  concorrencia-administradores"; falhas=$((falhas+1)); fi
+if DB="$DB" "$DIR/concorrencia-credencial.sh"; then echo "PASSOU  concorrencia-credencial"; else echo "FALHOU  concorrencia-credencial"; falhas=$((falhas+1)); fi
 [ "$falhas" -eq 0 ] && echo "Todos os testes SQL passaram." || { echo "$falhas teste(s) falharam."; exit 1; }

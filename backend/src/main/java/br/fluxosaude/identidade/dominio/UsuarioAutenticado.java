@@ -15,10 +15,15 @@ import java.util.UUID;
  *
  * <p>O usuário atua em UMA unidade por vez ({@code unidadeAtiva}); o contexto do banco
  * (RLS) recebe só essa unidade — mínimo privilégio mesmo para quem tem várias lotações.
+ *
+ * <p>{@code credencialVersao} é a versão de credencial da conta lida JUNTO com o hash no
+ * login (V12). O banco a confere em toda transação: troca/redefinição de senha, mudança de
+ * situação ou de papéis a incrementam e a sessão antiga é recusada, mesmo que não tenha
+ * sido apagada. Sessões serializadas antes da V12 voltam com 0 e são recusadas (falha fechada).
  */
 public record UsuarioAutenticado(UUID usuarioId, String login, String nome,
                                  Map<UUID, Set<Papel>> lotacoes, UUID unidadeAtiva,
-                                 boolean deveTrocarSenha) implements Principal, Serializable {
+                                 boolean deveTrocarSenha, int credencialVersao) implements Principal, Serializable {
 
     private static final long serialVersionUID = 1L;
 
@@ -55,11 +60,12 @@ public record UsuarioAutenticado(UUID usuarioId, String login, String nome,
     }
 
     public UsuarioAutenticado comUnidadeAtiva(UUID unidade) {
-        return new UsuarioAutenticado(usuarioId, login, nome, lotacoes, unidade, deveTrocarSenha);
+        return new UsuarioAutenticado(usuarioId, login, nome, lotacoes, unidade, deveTrocarSenha, credencialVersao);
     }
 
-    public UsuarioAutenticado senhaTrocada() {
-        return new UsuarioAutenticado(usuarioId, login, nome, lotacoes, unidadeAtiva, false);
+    /** Após a troca da própria senha: a sessão atual passa à nova versão de credencial. */
+    public UsuarioAutenticado senhaTrocada(int novaCredencialVersao) {
+        return new UsuarioAutenticado(usuarioId, login, nome, lotacoes, unidadeAtiva, false, novaCredencialVersao);
     }
 
     /** Evita vazar nome/login em logs por acidente (toString padrão de record). */
