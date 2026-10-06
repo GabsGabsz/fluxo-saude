@@ -1,5 +1,6 @@
 package br.fluxosaude.episodio.aplicacao;
 
+import br.fluxosaude.compartilhado.RegraVioladaException;
 import br.fluxosaude.compartilhado.RecursoNaoEncontradoException;
 import br.fluxosaude.episodio.dominio.Pseudonimo;
 import br.fluxosaude.identidade.aplicacao.ContextoOrigem;
@@ -71,6 +72,41 @@ public final class ServicoConsultas {
                         l.etapaNome(), l.natureza(), l.entradaEm(), l.etapaDesde(), l.categoriaBloqueio(),
                         l.bloqueioDesde(), l.pendenciasVencidas(), alerta.contains(l.episodioId())))
                 .toList();
+    }
+
+    /**
+     * Catálogo da unidade ativa para a interface (setores, etapas e transições, motivos,
+     * especialidades). Exige alguma permissão na unidade; a lista de profissionais (nomes) só
+     * vai para quem atua nos casos ({@code EPISODIO_VER}) ou gere usuários.
+     */
+    public Consultas.Catalogo catalogo(UsuarioAutenticado u, ContextoOrigem origem) {
+        if (u == null || u.permissoes().isEmpty() || u.deveTrocarSenha()) {
+            throw new AcessoNegadoException(null);
+        }
+        boolean profissionais = u.pode(Permissao.EPISODIO_VER) || u.pode(Permissao.USUARIO_GERENCIAR);
+        return transacao.executar(u, origem, r -> r.consultas().catalogo(profissionais));
+    }
+
+    /**
+     * RF-003: localiza cadastro existente por CNS OU identificador institucional EXATO (para
+     * abrir episódio sem duplicar cadastro). Cada cadastro devolvido é auditado (RNF-002).
+     */
+    public List<Consultas.PacienteEncontrado> pacientes(UsuarioAutenticado u, ContextoOrigem origem, String cns,
+                                                        String identificador) {
+        AcessoNegadoException.exigir(u, Permissao.EPISODIO_ABRIR);
+        String c = cns == null || cns.isBlank() ? null : cns.replaceAll("[\\s.-]", "");
+        String i = identificador == null || identificador.isBlank() ? null : identificador.strip();
+        RegraVioladaException.exigir((c == null) != (i == null), "BUSCA_INVALIDA",
+                "Informe o CNS ou o identificador institucional (apenas um)");
+        RegraVioladaException.exigir(c == null || br.fluxosaude.episodio.dominio.Cns.valido(c), "CNS_INVALIDO",
+                "CNS inválido");
+        RegraVioladaException.exigir(i == null || i.length() <= 40, "IDENTIFICADOR_INVALIDO",
+                "Identificador institucional inválido");
+        return transacao.executar(u, origem, r -> {
+            List<Consultas.PacienteEncontrado> achados = r.consultas().pacientes(c, i);
+            achados.forEach(p -> r.consultas().registrarConsultaDePaciente(p.id(), u.unidadeAtiva()));
+            return achados;
+        });
     }
 
     private static Consultas.FiltroTorre normalizar(Consultas.FiltroTorre f) {

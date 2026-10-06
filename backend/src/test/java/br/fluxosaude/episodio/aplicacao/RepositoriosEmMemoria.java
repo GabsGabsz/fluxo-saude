@@ -127,6 +127,10 @@ final class RepositoriosEmMemoria implements Repositorios, Transacao {
         observacoes.put(id, texto);
     }
 
+    Boolean ultimoCatalogoComProfissionais;
+    String ultimaBuscaPaciente;
+    List<Consultas.PacienteEncontrado> pacientesEncontrados = List.of();
+
     @Override public Consultas consultas() {
         return new Consultas() {
             @Override public List<LinhaTorre> torre(FiltroTorre filtro) {
@@ -142,6 +146,19 @@ final class RepositoriosEmMemoria implements Repositorios, Transacao {
             @Override public List<LinhaPainel> painel(int limite) { return painel; }
             @Override public void registrarConsultaDeCaso(UUID episodioId, UUID unidadeId) {
                 consultasRegistradas.add(episodioId);
+            }
+            @Override public Catalogo catalogo(boolean incluirProfissionais) {
+                ultimoCatalogoComProfissionais = incluirProfissionais;
+                return new Catalogo(new UnidadeInfo(fluxo.unidadeId(), "UPA", "UPA Teste", "America/Fortaleza"),
+                        List.of(), List.of(), List.of(), List.of(), List.of(),
+                        incluirProfissionais ? List.of(new Profissional(UUID.randomUUID(), "Profissional")) : List.of());
+            }
+            @Override public List<PacienteEncontrado> pacientes(String cns, String identificador) {
+                ultimaBuscaPaciente = cns != null ? "cns:" + cns : "id:" + identificador;
+                return pacientesEncontrados;
+            }
+            @Override public void registrarConsultaDePaciente(UUID pacienteId, UUID unidadeId) {
+                consultasRegistradas.add(pacienteId);
             }
         };
     }

@@ -72,4 +72,51 @@ public interface Consultas {
 
     /** RNF-002: registra consulta nominal a um caso (auditoria de acesso). */
     void registrarConsultaDeCaso(UUID episodioId, UUID unidadeId);
+
+    // ------------------------------------------------------------ catálogo da unidade (interface)
+
+    record UnidadeInfo(UUID id, String codigo, String nome, String fusoHorario) {
+    }
+
+    record SetorInfo(UUID id, String codigo, String nome, boolean ativo) {
+    }
+
+    record EtapaInfo(UUID id, String codigo, String nome, int ordem, String natureza, String desfecho, boolean inicial,
+                     boolean exigeMotivo, boolean exigeProtocolo, boolean exigeJustificativa, boolean ativa) {
+    }
+
+    record TransicaoInfo(UUID origemId, UUID destinoId) {
+    }
+
+    record MotivoInfo(UUID id, String categoria, String codigo, String descricao, boolean exigeDetalhe, boolean ativo) {
+    }
+
+    record EspecialidadeInfo(UUID id, String codigo, String nome) {
+    }
+
+    /** Profissional lotado na unidade (só id e nome): para escolher o responsável de pendência. */
+    record Profissional(UUID id, String nome) {
+    }
+
+    /**
+     * Dados de configuração da unidade ATIVA necessários aos formulários (RLS: só a unidade do
+     * contexto). {@code profissionais} vazio quando não solicitado.
+     */
+    record Catalogo(UnidadeInfo unidade, List<SetorInfo> setores, List<EtapaInfo> etapas,
+                    List<TransicaoInfo> transicoes, List<MotivoInfo> motivos, List<EspecialidadeInfo> especialidades,
+                    List<Profissional> profissionais) {
+    }
+
+    Catalogo catalogo(boolean incluirProfissionais);
+
+    /** Paciente localizado por identificador exato (CNS ou institucional) na unidade ativa. */
+    record PacienteEncontrado(UUID id, String nome, java.time.LocalDate dataNascimento, boolean reconciliado,
+                              UUID reconciliadoComId, boolean temEpisodioAtivo) {
+    }
+
+    /** Busca EXATA por CNS ou identificador institucional (nunca por nome; RF-003). */
+    List<PacienteEncontrado> pacientes(String cns, String identificador);
+
+    /** RNF-002: registra consulta nominal a um cadastro de paciente. */
+    void registrarConsultaDePaciente(UUID pacienteId, UUID unidadeId);
 }

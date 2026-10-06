@@ -53,4 +53,7 @@ final class SessaoDtos {
 
     record CsrfResponse(String cabecalho) {
     }
+
+    record UnidadeResponse(java.util.UUID id, String codigo, String nome, String fusoHorario) {
+    }
 }
