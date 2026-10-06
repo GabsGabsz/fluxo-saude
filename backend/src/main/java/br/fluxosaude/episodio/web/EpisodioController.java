@@ -1,5 +1,6 @@
 package br.fluxosaude.episodio.web;
 
+import br.fluxosaude.alerta.aplicacao.ServicoAlertas;
 import br.fluxosaude.compartilhado.RegraVioladaException;
 import br.fluxosaude.episodio.aplicacao.Consultas;
 import br.fluxosaude.episodio.aplicacao.ServicoConsultas;
@@ -21,6 +22,9 @@ import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import java.net.URI;
 import java.time.Clock;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnWebApplication;
 import org.springframework.http.ResponseEntity;
@@ -64,14 +68,16 @@ class EpisodioController {
     private final ServicoEpisodios episodios;
     private final ServicoPendencias pendencias;
     private final ServicoConsultas consultas;
+    private final ServicoAlertas alertas;
     private final ProvedorContexto provedor;
     private final Clock relogio;
 
     EpisodioController(ServicoEpisodios episodios, ServicoPendencias pendencias, ServicoConsultas consultas,
-                       ProvedorContexto provedor, Clock relogio) {
+                       ServicoAlertas alertas, ProvedorContexto provedor, Clock relogio) {
         this.episodios = episodios;
         this.pendencias = pendencias;
         this.consultas = consultas;
+        this.alertas = alertas;
         this.provedor = provedor;
         this.relogio = relogio;
     }
@@ -93,7 +99,19 @@ class EpisodioController {
                                      HttpServletRequest req) {
         var filtro = new Consultas.FiltroTorre(setor, etapa, motivo, categoria == null ? null : categoria.name(),
                 especialidade, responsavel, minutosNaEtapa, somenteVencidas, ordem, decrescente, limite);
-        return new EpisodioDtos.TorreResponse(relogio.instant(), consultas.torre(usuario(), origem(req), filtro));
+        UsuarioAutenticado u = usuario();
+        List<Consultas.LinhaTorre> itens = consultas.torre(u, origem(req), filtro);
+        // RF-011 / CA-05: destaque dos casos que atingiram limites configurados (calculado no servidor).
+        ServicoAlertas.AlertasDosEpisodios a = alertas.alertasDe(u, origem(req),
+                itens.stream().map(Consultas.LinhaTorre::episodioId).toList());
+        Map<UUID, List<EpisodioDtos.AlertaResumo>> destaque = new HashMap<>();
+        for (Consultas.LinhaTorre l : itens) {
+            List<ServicoAlertas.AlertaVisto> doCaso = a.porEpisodio().get(l.episodioId());
+            if (doCaso != null) {
+                destaque.put(l.episodioId(), doCaso.stream().map(EpisodioDtos.AlertaResumo::de).toList());
+            }
+        }
+        return new EpisodioDtos.TorreResponse(a.agora(), itens, destaque);
     }
 
     @GetMapping("/episodios/{id}")
@@ -103,7 +121,9 @@ class EpisodioController {
 
     @GetMapping("/painel")
     EpisodioDtos.PainelResponse painel(HttpServletRequest req) {
-        return new EpisodioDtos.PainelResponse(relogio.instant(), consultas.painel(usuario(), origem(req)));
+        UsuarioAutenticado u = usuario();
+        var linhas = consultas.painel(u, origem(req), ids -> alertas.episodiosEmAlerta(u, origem(req), ids));
+        return new EpisodioDtos.PainelResponse(relogio.instant(), linhas);
     }
 
     // --------------------------------------------------------------------- episódio
