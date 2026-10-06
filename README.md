@@ -4,16 +4,17 @@ Plataforma de gestão operacional do fluxo assistencial: identifica pacientes pa
 quanto tempo aguardam, registra o gargalo atual, define a próxima ação e o responsável.
 **Não é prontuário e não substitui a regulação oficial.** Especificação: **ERS v1.1** (revisão técnica).
 
-## Estado atual — etapa 4 (gestão de usuários e lotações) — em revisão no PR
+## Estado atual — etapa 5 (alertas e "Pacientes travados") — em revisão no PR (etapa 4 no PR #6)
 
 | Camada | Conteúdo | Verificação |
 |---|---|---|
-| Banco (PostgreSQL 16) | Esquema do núcleo, regras críticas em `CHECK`/triggers, RLS por unidade (inclusive usuários e auditoria), auditoria imutável com cadeia SHA-256, login por funções controladas, observações (V9), margem de relógio (V10), gestão de usuários só por funções com alcance conferido (V11), versão de credencial conferida em toda transação (V12) | `backend/src/test/sql` — 12 suítes + 4 testes de concorrência |
+| Banco (PostgreSQL 16) | Esquema do núcleo, regras críticas em `CHECK`/triggers, RLS por unidade (inclusive usuários e auditoria), auditoria imutável com cadeia SHA-256, login por funções controladas, observações (V9), margem de relógio (V10), gestão de usuários só por funções com alcance conferido (V11), versão de credencial conferida em toda transação (V12), regras de alerta e ciência (V13) | `backend/src/test/sql` — 13 suítes + 4 testes de concorrência |
 | Domínio (Java 21, sem framework) | `Episodio`, `Pendencia`, `FluxoConfigurado`, ajuste manual de horário, pseudônimo, UUIDv7 | 45 testes JUnit, incl. o cenário completo da ERS §11 |
 | Identidade (núcleo puro) | Política de senha, limitadores, matriz de permissões, serviço de autenticação | `ServicoAutenticacaoTest`, `MatrizPermissoesTest`, ... |
 | Casos de uso (núcleo puro) | `ServicoEpisodios`, `ServicoPendencias`, `ServicoConsultas`: permissão na unidade ativa, versão lida (409), ajuste manual de horário, painel pseudonimizado | `ServicosDeAplicacaoTest` (portas em memória) |
 | Gestão de usuários (núcleo puro) | `ServicoGestaoUsuarios`: alcance de lotação × alcance de conta, sem autoalteração, senha provisória, encerramento de sessões | `ServicoGestaoUsuariosTest` |
-| Aplicação (Spring Boot 4.1) | Login/sessão no servidor, CSRF SPA, revalidação no banco por transação, API REST de episódios/pendências/Torre e administração de usuários, erros padronizados; migração em job separado | `SessaoIT`, `EpisodiosIT` (cenário ERS §11 via HTTP), `GestaoUsuariosIT`, `SessaoSobreviventeIT`, `BancoDeDadosIT` (Testcontainers) |
+| Alertas (núcleo puro) | `MotorDeAlertas` (regras × estado do episódio × relógio do servidor), `ServicoAlertas` (travados, destaque, ciência, configuração) | `MotorDeAlertasTest` (fronteiras com relógio controlado), `ServicoAlertasTest` |
+| Aplicação (Spring Boot 4.1) | Login/sessão no servidor, CSRF SPA, revalidação no banco por transação, API REST de episódios/pendências/Torre e administração de usuários, erros padronizados; migração em job separado | `SessaoIT`, `EpisodiosIT` (cenário ERS §11 via HTTP), `GestaoUsuariosIT`, `SessaoSobreviventeIT`, `AlertasIT`, `BancoDeDadosIT` (Testcontainers) |
 
 Mapa requisito → código → teste: [`docs/rastreabilidade.md`](docs/rastreabilidade.md).
 Escolhas que precisam de validação com a equipe: [`docs/decisoes-a-validar.md`](docs/decisoes-a-validar.md).
@@ -26,6 +27,7 @@ Escolhas que precisam de validação com a equipe: [`docs/decisoes-a-validar.md`
 - [ADR-0004](docs/adr/0004-isolamento-por-unidade.md) — RLS por unidade e mínimo privilégio
 - [ADR-0005](docs/adr/0005-tempo-concorrencia-duplicidade.md) — horário do servidor e ajuste manual, controle otimista, duplicidade sem bloqueio (ERS v1.1)
 - [ADR-0006](docs/adr/0006-gestao-de-usuarios.md) — gestão de usuários: alcance por lotação × conta, autoalteração, último administrador, contas órfãs
+- [ADR-0007](docs/adr/0007-alertas-e-travados.md) — alertas operacionais calculados no servidor, "Pacientes travados", ciência
 
 ## Rodando localmente
 
@@ -63,6 +65,19 @@ API de sessão (JSON; CSRF via cookie `XSRF-TOKEN` → cabeçalho `X-XSRF-TOKEN`
 | PUT | `/api/sessao/unidade` | troca a unidade ativa |
 | PUT | `/api/sessao/senha` | troca a senha (obrigatória no 1º acesso) |
 | DELETE | `/api/sessao` | logout |
+
+Alertas e "Pacientes travados" (alerta operacional ≠ risco clínico; regras são parâmetros da
+unidade — **nenhuma vem cadastrada**; ver [ADR-0007](docs/adr/0007-alertas-e-travados.md)):
+
+| Método | Caminho | Uso |
+|---|---|---|
+| GET | `/api/travados` | episódios abertos que violam regra ativa: tempos, motivo, pendências (responsável, prazo), alertas, ação esperada |
+| POST | `/api/episodios/{id}/alertas/ciencia` | "ciente" de uma ocorrência em alerta (`regraId`, `referenciaEm`, `pendenciaId`); não encerra pendência |
+| GET | `/api/config/regras-alerta` | regras da unidade ativa |
+| POST | `/api/config/regras-alerta` | cria regra (Administrador): `nome`, `tipo`, `etapaId`, `categoria`, `limiteMinutos`, `acaoEsperada` |
+| PUT | `/api/config/regras-alerta/{id}` | altera/desativa (`versao` obrigatória) |
+
+A Torre (`GET /api/episodios`) traz `alertas` por episódio listado; o painel coletivo, só `emAlerta`.
 
 API de administração de usuários (perfil Administrador, sempre na **unidade ativa**; toda
 alteração envia a `versao` lida → 409 se mudou; ver [ADR-0006](docs/adr/0006-gestao-de-usuarios.md)):
@@ -140,9 +155,10 @@ backend/
     episodio/aplicacao/   casos de uso e portas (puros)
     episodio/infra/       adaptadores JDBC (escrita e consultas da Torre)
     episodio/web/         API REST
-    identidade/           login, sessão, permissões (mesma divisão)
+    identidade/           login, sessão, permissões, gestão de usuários (mesma divisão)
+    alerta/               regras de alerta, "Pacientes travados", ciência (mesma divisão)
     configuracao/         Spring (relógio, segurança, montagem dos módulos)
-  src/main/resources/db/migration/   V1..V12 (Flyway)
+  src/main/resources/db/migration/   V1..V13 (Flyway)
   src/test/java/          testes de domínio, arquitetura e integração
   src/test/sql/           testes das garantias do banco
 infra/db/init/            bootstrap de papéis/banco (dev, testes e referência p/ DBA)
@@ -154,6 +170,6 @@ docs/                     ADRs, rastreabilidade, decisões a validar
 1. ~~Autenticação, sessão e autorização~~ (etapa 2, concluída).
 2. ~~Casos de uso e API REST: episódio, etapas, pendências, linha do tempo~~ (etapa 3, concluída).
 3. ~~Gestão de usuários e lotações pelo administrador~~ (etapa 4, em revisão).
-4. Alertas/SLA e "Pacientes travados" (M04, RF-018, RN-006).
+4. ~~Alertas/SLA e "Pacientes travados" (M04, RF-018, RN-006)~~ (etapa 5, em revisão; escalonamento aguarda V-05/V-06).
 5. Torre de Controle e telas (front-end).
 6. Passagem de plantão (M06) e indicadores (M07).

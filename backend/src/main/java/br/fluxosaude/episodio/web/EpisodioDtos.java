@@ -95,7 +95,21 @@ final class EpisodioDtos {
     }
 
     /** {@code agora} = relógio do servidor: o cliente calcula cronômetros sem depender do relógio local. */
-    record TorreResponse(Instant agora, List<Consultas.LinhaTorre> itens) {
+    record TorreResponse(Instant agora, List<Consultas.LinhaTorre> itens,
+                         java.util.Map<UUID, List<AlertaResumo>> alertas) {
+    }
+
+    /**
+     * Destaque de alerta OPERACIONAL na Torre (RF-011): não é risco clínico nem prioridade (RN-013).
+     * Os detalhes (responsável, ação esperada) estão em /api/travados.
+     */
+    record AlertaResumo(UUID regraId, String regraNome, br.fluxosaude.alerta.dominio.TipoRegraAlerta tipo,
+                        Instant referenciaEm, Instant atingidoEm, UUID pendenciaId, boolean ciente) {
+        static AlertaResumo de(br.fluxosaude.alerta.aplicacao.ServicoAlertas.AlertaVisto v) {
+            var a = v.alerta();
+            return new AlertaResumo(a.regraId(), a.regraNome(), a.tipo(), a.referenciaEm(), a.atingidoEm(),
+                    a.pendenciaId(), v.ciencia() != null);
+        }
     }
 
     /**

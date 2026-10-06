@@ -20,10 +20,13 @@ public final class ServicoConsultas {
 
     public static final int LIMITE_MAXIMO = 500;
 
-    /** Linha do painel coletivo: sem nome, sem CNS (RNF-015). */
+    /**
+     * Linha do painel coletivo: sem nome, sem CNS (RNF-015). {@code emAlerta}: viola alguma regra
+     * operacional da unidade (sem detalhar qual — o detalhe é nominal, em /api/travados).
+     */
     public record LinhaPainelPseudonimizada(String identificacao, String setor, String etapa, String natureza,
                                             Instant entradaEm, Instant etapaDesde, String categoriaBloqueio,
-                                            Instant bloqueioDesde, int pendenciasVencidas) {
+                                            Instant bloqueioDesde, int pendenciasVencidas, boolean emAlerta) {
     }
 
     private final Transacao transacao;
@@ -49,11 +52,24 @@ public final class ServicoConsultas {
     }
 
     public List<LinhaPainelPseudonimizada> painel(UsuarioAutenticado u, ContextoOrigem origem) {
+        return painel(u, origem, ids -> java.util.Set.of());
+    }
+
+    /**
+     * @param emAlerta dado o conjunto de episódios do painel, devolve os que violam regras ativas
+     *                 (calculado pelo módulo de alertas exatamente sobre esses episódios)
+     */
+    public List<LinhaPainelPseudonimizada> painel(UsuarioAutenticado u, ContextoOrigem origem,
+                                                  java.util.function.Function<java.util.Collection<UUID>,
+                                                          java.util.Set<UUID>> emAlerta) {
         AcessoNegadoException.exigir(u, Permissao.PAINEL_COLETIVO_VER);
-        return transacao.executar(u, origem, r -> r.consultas().painel(LIMITE_MAXIMO)).stream()
+        Objects.requireNonNull(emAlerta);
+        List<Consultas.LinhaPainel> linhas = transacao.executar(u, origem, r -> r.consultas().painel(LIMITE_MAXIMO));
+        java.util.Set<UUID> alerta = emAlerta.apply(linhas.stream().map(Consultas.LinhaPainel::episodioId).toList());
+        return linhas.stream()
                 .map(l -> new LinhaPainelPseudonimizada(Pseudonimo.de(l.pacienteNome(), l.episodioId()), l.setorNome(),
                         l.etapaNome(), l.natureza(), l.entradaEm(), l.etapaDesde(), l.categoriaBloqueio(),
-                        l.bloqueioDesde(), l.pendenciasVencidas()))
+                        l.bloqueioDesde(), l.pendenciasVencidas(), alerta.contains(l.episodioId())))
                 .toList();
     }
 

@@ -31,6 +31,12 @@ unidade**, não regras fixas (RN-014, Anexo B.3). Cada item indica a validação
 | 23 | Remover a última lotação **desativa** a conta; conta órfã só é reativada pelo DBA; vínculo entre unidades só de conta ativa, localizada pelo login exato; revogar o acesso na unidade gestora encerra a gestão da conta pela aplicação (DBA a partir daí) | V11 | V-06 |
 | 24 | Senha provisória gerada pelo sistema e exibida uma vez ao administrador, que a entrega ao profissional por canal seguro (procedimento institucional a definir) | `GeradorSenhaProvisoria` | V-10 |
 | 26 | Encerram todas as sessões do usuário: troca da própria senha (exceto a sessão que trocou), senha provisória, desativação/reativação e alteração de papéis em qualquer unidade; a implantação da V12 encerra todas as sessões existentes uma vez | V12 | V-10 |
+| 27 | Tipos de regra de "travado": tempo na etapa, tempo total, tempo bloqueado (por categoria), sem atualização, pendência vencida (ADR-0007). Nenhuma regra vem cadastrada; cada unidade configura as suas | V13 | V-05 |
+| 28 | Fronteira: o alerta vale quando o limite é **atingido** (`≥`); pendência vencida quando `agora > prazo` (igual à Torre) | `MotorDeAlertas` | V-05 |
+| 29 | "Sem atualização" = nenhum registro na linha do tempo (qualquer evento, inclusive observação) há mais que o limite | `MotorDeAlertas` | V-05 |
+| 30 | Quem configura regras: Administrador; quem vê travados: quem tem acesso nominal (`EPISODIO_VER`); quem registra ciência: `EPISODIO_ALTERAR` (coordenação, enfermagem, médico); painel coletivo só sinaliza "em alerta" | V13, `ServicoAlertas` | V-06 |
+| 31 | Ordem do painel de travados: limite atingido há mais tempo primeiro (critério operacional, não prioridade clínica) | `ServicoAlertas` | V-05 |
+| 32 | Escalonamento e notificações direcionadas **não implementados**: aguardam níveis, destinatários e tempos | — | V-05, V-06 |
 | 25 | **Limitação conhecida:** o contexto da transação (GUCs) pode ser definido pelo próprio papel da aplicação; as regras do banco não resistem a SQL arbitrário como `fluxo_app`. Proposta: contexto não forjável (etapa própria, afeta todas as políticas) | V1/V8 | V-10 |
 
 **Não decidido, e não deve ser decidido pelo desenvolvedor:** limites de alerta e SLA por etapa
