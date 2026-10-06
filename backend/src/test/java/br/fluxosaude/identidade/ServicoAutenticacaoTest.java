@@ -40,7 +40,8 @@ class ServicoAutenticacaoTest {
     static final class HashFalso implements HashDeSenha {
         int verificacoes;
         @Override public String gerar(String s) { return "h:" + s; }
-        @Override public boolean confere(String s, String h) { verificacoes++; return h.equals("h:" + s); }
+        Runnable aoConferir = () -> { };
+        @Override public boolean confere(String s, String h) { verificacoes++; aoConferir.run(); return h.equals("h:" + s); }
         @Override public String hashFicticio() { return "h:" + UUID.randomUUID(); }
     }
 
@@ -49,6 +50,10 @@ class ServicoAutenticacaoTest {
         final Map<UUID, Map<UUID, Set<Papel>>> lotacoes = new HashMap<>();
         final List<String> tentativas = new ArrayList<>();
         String hashGravado;
+        /** Versão de credencial vigente no "banco" (muda com troca/redefinição de senha). */
+        int versaoVigente = 1;
+        /** Simula redefinição de senha concorrente: executado durante a verificação do hash. */
+        Runnable duranteVerificacao = () -> { };
 
         @Override public Optional<Credencial> buscarPorLogin(String login, ContextoOrigem o) {
             return Optional.ofNullable(porLogin.get(login));
@@ -60,15 +65,27 @@ class ServicoAutenticacaoTest {
         @Override public void registrarTentativaDuranteBloqueio(UUID id, ContextoOrigem o) {
             tentativas.add(id + ":bloqueada");
         }
-        @Override public void registrarFalhaNaTrocaDeSenha(UUID id, ContextoOrigem o) {
+        @Override public void registrarFalhaNaTrocaDeSenha(UUID id, int versao, ContextoOrigem o) {
             tentativas.add(id + ":troca-falhou");
         }
         @Override public Map<UUID, Set<Papel>> lotacoes(UUID id, ContextoOrigem o) {
             return lotacoes.getOrDefault(id, Map.of());
         }
-        @Override public Perfil perfil(UUID id, ContextoOrigem o) { return new Perfil("enf.a", "Enfermeira A"); }
-        @Override public String hashAtual(UUID id, ContextoOrigem o) { return porLogin.get("enf.a").senhaHash(); }
-        @Override public void gravarNovaSenha(UUID id, String novoHash, ContextoOrigem o) { hashGravado = novoHash; }
+        /** Como o banco: a primeira transação com o usuário no contexto confere a versão. */
+        @Override public Perfil perfil(UUID id, int versao, ContextoOrigem o) {
+            if (versao != versaoVigente) {
+                throw new br.fluxosaude.identidade.dominio.SessaoRevogadaException();
+            }
+            return new Perfil("enf.a", "Enfermeira A");
+        }
+        @Override public String hashAtual(UUID id, int versao, ContextoOrigem o) { return porLogin.get("enf.a").senhaHash(); }
+        @Override public int gravarNovaSenha(UUID id, int versao, String novoHash, ContextoOrigem o) {
+            if (versao != versaoVigente) {
+                throw new br.fluxosaude.identidade.dominio.SessaoRevogadaException();
+            }
+            hashGravado = novoHash;
+            return ++versaoVigente;
+        }
     }
 
     HashFalso hash;
@@ -79,7 +96,7 @@ class ServicoAutenticacaoTest {
     void setUp() {
         hash = new HashFalso();
         cred = new CredenciaisFalsas();
-        cred.porLogin.put("enf.a", new CredenciaisPort.Credencial(USUARIO, "h:senha correta longa", true, false, null));
+        cred.porLogin.put("enf.a", new CredenciaisPort.Credencial(USUARIO, "h:senha correta longa", true, false, null, 1));
         cred.lotacoes.put(USUARIO, Map.of(UNIDADE, Set.of(Papel.ENFERMAGEM)));
         Clock clock = Clock.fixed(AGORA, ZoneOffset.UTC);
         servico = new ServicoAutenticacao(cred, hash, new ServicoAutenticacao.Limites(
@@ -121,7 +138,7 @@ class ServicoAutenticacaoTest {
     @DisplayName("Conta bloqueada falha mesmo com a senha certa e não prolonga o bloqueio")
     void contaBloqueada() {
         cred.porLogin.put("enf.a", new CredenciaisPort.Credencial(USUARIO, "h:senha correta longa", true, false,
-                AGORA.plus(Duration.ofMinutes(3))));
+                AGORA.plus(Duration.ofMinutes(3)), 1));
         ResultadoAutenticacao r = servico.autenticar("enf.a", "senha correta longa", ORIGEM);
         assertEquals(ResultadoAutenticacao.Motivo.CONTA_BLOQUEADA, ((ResultadoAutenticacao.Falha) r).motivo());
         assertEquals(List.of(USUARIO + ":bloqueada"), cred.tentativas, "auditada sem incrementar falhas");
@@ -130,10 +147,10 @@ class ServicoAutenticacaoTest {
 
     @Test
     void contaInativaESemLotacao() {
-        cred.porLogin.put("enf.a", new CredenciaisPort.Credencial(USUARIO, "h:senha correta longa", false, false, null));
+        cred.porLogin.put("enf.a", new CredenciaisPort.Credencial(USUARIO, "h:senha correta longa", false, false, null, 1));
         assertEquals(ResultadoAutenticacao.Motivo.CONTA_INATIVA,
                 ((ResultadoAutenticacao.Falha) servico.autenticar("enf.a", "senha correta longa", ORIGEM)).motivo());
-        cred.porLogin.put("enf.a", new CredenciaisPort.Credencial(USUARIO, "h:senha correta longa", true, false, null));
+        cred.porLogin.put("enf.a", new CredenciaisPort.Credencial(USUARIO, "h:senha correta longa", true, false, null, 1));
         cred.lotacoes.clear();
         assertEquals(ResultadoAutenticacao.Motivo.SEM_LOTACAO,
                 ((ResultadoAutenticacao.Falha) servico.autenticar("enf.a", "senha correta longa", ORIGEM)).motivo());
@@ -155,7 +172,7 @@ class ServicoAutenticacaoTest {
     @Test
     @DisplayName("Sucesso NÃO zera o limite por origem (quem tem conta válida não 'limpa' o contador)")
     void sucessoNaoZeraLimite() {
-        cred.porLogin.put("outro", new CredenciaisPort.Credencial(UUID.randomUUID(), "h:x", true, false, null));
+        cred.porLogin.put("outro", new CredenciaisPort.Credencial(UUID.randomUUID(), "h:x", true, false, null, 1));
         for (int i = 0; i < 4; i++) {
             servico.autenticar("outro", "errada", ORIGEM);
         }
@@ -179,8 +196,42 @@ class ServicoAutenticacaoTest {
     }
 
     @Test
+    @DisplayName("Login concorrente com redefinição: senha antiga conferida, mas credencial já mudou → sem sessão")
+    void loginConcorrenteComRedefinicaoDeSenha() {
+        // A redefinição acontece enquanto o Argon2 confere a senha ANTIGA (lida junto com a versão 1)
+        hash.aoConferir = () -> cred.versaoVigente = 2;
+        ResultadoAutenticacao r = servico.autenticar("enf.a", "senha correta longa", ORIGEM);
+        assertEquals(ResultadoAutenticacao.Motivo.CREDENCIAL_ALTERADA, ((ResultadoAutenticacao.Falha) r).motivo());
+        assertTrue(cred.tentativas.isEmpty(), "nenhum sucesso auditado (e não conta como erro de senha)");
+        // Com a credencial nova vigente, um novo login com a mesma senha antiga e versão antiga
+        // (cadastro ainda não relido) também não passa; não bloqueia a origem.
+        hash.aoConferir = () -> { };
+        cred.porLogin.put("enf.a", new CredenciaisPort.Credencial(USUARIO, "h:senha correta longa", true, false, null, 2));
+        assertTrue(servico.autenticar("enf.a", "senha correta longa", ORIGEM) instanceof ResultadoAutenticacao.Sucesso);
+    }
+
+    @Test
+    @DisplayName("Troca da própria senha com sessão desatualizada (outra troca/redefinição antes) é recusada")
+    void trocaComSessaoDesatualizada() {
+        UsuarioAutenticado u = ((ResultadoAutenticacao.Sucesso) servico.autenticar("enf.a", "senha correta longa", ORIGEM)).usuario();
+        cred.versaoVigente = 2; // redefinição confirmada por outra transação
+        assertThrows(br.fluxosaude.identidade.dominio.SessaoRevogadaException.class,
+                () -> servico.trocarSenha(u, "senha correta longa", "nova frase bem comprida", ORIGEM));
+        assertEquals(null, cred.hashGravado, "nada gravado");
+    }
+
+    @Test
+    void sessaoNasceComAVersaoLidaJuntoComOHash() {
+        cred.porLogin.put("enf.a", new CredenciaisPort.Credencial(USUARIO, "h:senha correta longa", true, false, null, 7));
+        cred.versaoVigente = 7;
+        UsuarioAutenticado u = ((ResultadoAutenticacao.Sucesso) servico.autenticar("enf.a", "senha correta longa", ORIGEM))
+                .usuario();
+        assertEquals(7, u.credencialVersao());
+    }
+
+    @Test
     void trocaDeSenha() {
-        cred.porLogin.put("enf.a", new CredenciaisPort.Credencial(USUARIO, "h:senha correta longa", true, true, null));
+        cred.porLogin.put("enf.a", new CredenciaisPort.Credencial(USUARIO, "h:senha correta longa", true, true, null, 1));
         UsuarioAutenticado u = ((ResultadoAutenticacao.Sucesso) servico.autenticar("enf.a", "senha correta longa", ORIGEM)).usuario();
         assertTrue(u.deveTrocarSenha());
         assertEquals("SENHA_ATUAL_INCORRETA", assertThrows(RegraVioladaException.class,
@@ -191,6 +242,8 @@ class ServicoAutenticacaoTest {
                 () -> servico.trocarSenha(u, "senha correta longa", "senha correta longa", ORIGEM)).codigo());
         UsuarioAutenticado depois = servico.trocarSenha(u, "senha correta longa", "nova frase bem comprida", ORIGEM);
         assertFalse(depois.deveTrocarSenha());
+        assertEquals(u.credencialVersao() + 1, depois.credencialVersao(),
+                "a sessão atual segue com a nova versão; as demais passam a ser recusadas");
         assertEquals("h:nova frase bem comprida", cred.hashGravado);
     }
 }

@@ -151,7 +151,14 @@ class SessaoController {
         // Encerra todas as OUTRAS sessões do usuário ANTES de mudar o ID: o repositório
         // conhece a sessão atual pelo ID antigo (o novo só é gravado no fim da requisição).
         String idAtualNoRepositorio = request.getSession().getId();
-        encerrarSessoesExcedentes(novo, idAtualNoRepositorio, 0);
+        try {
+            encerrarSessoesExcedentes(novo, idAtualNoRepositorio, 0);
+        } catch (RuntimeException e) {
+            // A senha já foi gravada e a versão de credencial já recusa as outras sessões (V12):
+            // a falha na remoção física não pode desfazer a troca nem derrubar esta sessão.
+            org.slf4j.LoggerFactory.getLogger(SessaoController.class)
+                    .warn("falha ao remover outras sessões após troca de senha: {}", e.getClass().getSimpleName());
+        }
         request.changeSessionId();
         salvar(novo, request, response);
         rotacionarCsrf(request, response);

@@ -39,7 +39,10 @@ credencial compartilhada (ERS §16). SSO institucional pode não existir no iní
      mínimo privilégio) na **unidade ativa**; o usuário atua numa unidade por vez;
    - **banco, a cada transação:** `fluxo.aplicar_contexto` confere que o usuário segue ativo e
      lotado na unidade com os mesmos papéis da sessão; se não, a sessão é revogada (401
-     `SESSAO_REVOGADA`) — desativar um usuário corta o acesso na requisição seguinte.
+     `SESSAO_REVOGADA`) — desativar um usuário corta o acesso na requisição seguinte. Desde a
+     V12 confere também a **versão de credencial** guardada na sessão no login: troca ou
+     redefinição de senha, desativação/reativação e alteração de papéis recusam as sessões
+     anteriores mesmo que a remoção física delas falhe (ADR-0006 §7).
 8. **Hash de senha protegido no banco:** a aplicação não lê nem altera `senha_hash` por SQL
    (privilégio por coluna); troca só pelo próprio usuário via `fluxo.alterar_senha_propria`.
 9. **Auditoria de autenticação:** `LOGIN_SUCESSO`, `LOGIN_FALHA` (incl. login inexistente, sem

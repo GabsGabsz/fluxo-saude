@@ -5,6 +5,7 @@ import br.fluxosaude.compartilhado.RegraVioladaException;
 import br.fluxosaude.identidade.dominio.LimitadorDeTentativas;
 import br.fluxosaude.identidade.dominio.Papel;
 import br.fluxosaude.identidade.dominio.PoliticaSenha;
+import br.fluxosaude.identidade.dominio.SessaoRevogadaException;
 import br.fluxosaude.identidade.dominio.UsuarioAutenticado;
 import java.time.Clock;
 import java.time.Duration;
@@ -59,7 +60,8 @@ public final class ServicoAutenticacao {
         }
 
         ResultadoAutenticacao resultado = verificar(login, senhaBruta, origem);
-        if (resultado instanceof ResultadoAutenticacao.Falha) {
+        if (resultado instanceof ResultadoAutenticacao.Falha f
+                && f.motivo() != ResultadoAutenticacao.Motivo.CREDENCIAL_ALTERADA) {
             limites.porOrigem().registrarFalha(chaveOrigem);
             limites.porOrigemELogin().registrarFalha(chaveOrigemLogin);
         }
@@ -104,11 +106,23 @@ public final class ServicoAutenticacao {
             return new ResultadoAutenticacao.Falha(ResultadoAutenticacao.Motivo.SEM_LOTACAO);
         }
 
+        // Login concorrente com troca/redefinição de senha (ou desativação): a senha conferida
+        // acima veio da leitura que tinha a versão c.credencialVersao(). A leitura do perfil é a
+        // primeira transação com o usuário no contexto e o banco confere essa versão: se ela não
+        // é mais a vigente, a senha usada já não vale — recusa, sem sucesso auditado e sem
+        // sessão (não conta como erro de senha). Se a mudança ocorrer DEPOIS, a sessão nasce com
+        // a versão antiga e o banco a recusa na requisição seguinte.
+        CredenciaisPort.Perfil perfil;
+        try {
+            perfil = credenciais.perfil(c.usuarioId(), c.credencialVersao(), origem);
+        } catch (SessaoRevogadaException alterada) {
+            return new ResultadoAutenticacao.Falha(ResultadoAutenticacao.Motivo.CREDENCIAL_ALTERADA);
+        }
+
         credenciais.registrarTentativa(c.usuarioId(), true, origem);
-        CredenciaisPort.Perfil perfil = credenciais.perfil(c.usuarioId(), origem);
         UUID unidadeInicial = lotacoes.keySet().stream().sorted().findFirst().orElseThrow();
-        return new ResultadoAutenticacao.Sucesso(new UsuarioAutenticado(
-                c.usuarioId(), perfil.login(), perfil.nome(), lotacoes, unidadeInicial, c.deveTrocarSenha()));
+        return new ResultadoAutenticacao.Sucesso(new UsuarioAutenticado(c.usuarioId(), perfil.login(), perfil.nome(),
+                lotacoes, unidadeInicial, c.deveTrocarSenha(), c.credencialVersao()));
     }
 
     /** Troca de senha pelo próprio usuário (obrigatória no primeiro acesso). */
@@ -121,16 +135,17 @@ public final class ServicoAutenticacao {
         }
         String atual = PoliticaSenha.normalizar(senhaAtual == null ? "" : senhaAtual);
         boolean confere = atual.length() <= PoliticaSenha.MAXIMO * 4
-                && hash.confere(atual, credenciais.hashAtual(usuario.usuarioId(), origem));
+                && hash.confere(atual, credenciais.hashAtual(usuario.usuarioId(), usuario.credencialVersao(), origem));
         if (!confere) {
             limites.trocaDeSenhaPorUsuario().registrarFalha(chave);
-            credenciais.registrarFalhaNaTrocaDeSenha(usuario.usuarioId(), origem);
+            credenciais.registrarFalhaNaTrocaDeSenha(usuario.usuarioId(), usuario.credencialVersao(), origem);
             throw new RegraVioladaException("SENHA_ATUAL_INCORRETA", "A senha atual não confere");
         }
         PoliticaSenha.validar(novaSenha, usuario.login(), usuario.nome());
         String nova = PoliticaSenha.normalizar(novaSenha);
         RegraVioladaException.exigir(!nova.equals(atual), "SENHA_REPETIDA", "A nova senha deve ser diferente da atual");
-        credenciais.gravarNovaSenha(usuario.usuarioId(), hash.gerar(nova), origem);
-        return usuario.senhaTrocada();
+        int novaVersao = credenciais.gravarNovaSenha(usuario.usuarioId(), usuario.credencialVersao(), hash.gerar(nova),
+                origem);
+        return usuario.senhaTrocada(novaVersao);
     }
 }

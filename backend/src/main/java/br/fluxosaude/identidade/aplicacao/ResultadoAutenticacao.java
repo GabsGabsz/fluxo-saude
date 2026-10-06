@@ -19,5 +19,9 @@ public sealed interface ResultadoAutenticacao {
     record LimiteExcedido() implements ResultadoAutenticacao {
     }
 
-    enum Motivo { CREDENCIAIS_INVALIDAS, CONTA_BLOQUEADA, CONTA_INATIVA, SEM_LOTACAO }
+    /**
+     * {@code CREDENCIAL_ALTERADA}: a senha conferida era a vigente no início do login, mas foi
+     * trocada/redefinida (ou a conta desativada) durante a verificação — não cria sessão.
+     */
+    enum Motivo { CREDENCIAIS_INVALIDAS, CONTA_BLOQUEADA, CONTA_INATIVA, SEM_LOTACAO, CREDENCIAL_ALTERADA }
 }

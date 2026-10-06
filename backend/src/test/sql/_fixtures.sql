@@ -61,17 +61,24 @@ INSERT INTO fluxo.setor (id, unidade_id, codigo, nome) VALUES
     ('00000000-0000-0000-0000-0000000005a2', '00000000-0000-0000-0000-00000000000a', 'NIR', 'NIR'),
     ('00000000-0000-0000-0000-0000000005b1', '00000000-0000-0000-0000-00000000000b', 'EMERGENCIA', 'Emergência');
 
-INSERT INTO fluxo.usuario (id, login, nome, senha_hash) VALUES
-    ('11111111-1111-1111-1111-000000000001', 'admin.a', 'Admin A',       '{argon2@SpringSecurity_v5_8}$argon2id$v=19$m=16384,t=2,p=1$ZmljdGljaW8$ZmljdGljaW8'),
-    ('11111111-1111-1111-1111-000000000002', 'enf.a',   'Enfermeira A',  '{argon2@SpringSecurity_v5_8}$argon2id$v=19$m=16384,t=2,p=1$ZmljdGljaW8$ZmljdGljaW8'),
-    ('11111111-1111-1111-1111-000000000003', 'coord.b', 'Coordenação B', '{argon2@SpringSecurity_v5_8}$argon2id$v=19$m=16384,t=2,p=1$ZmljdGljaW8$ZmljdGljaW8');
+INSERT INTO fluxo.usuario (id, login, nome, senha_hash, unidade_gestora_id) VALUES
+    ('11111111-1111-1111-1111-000000000001', 'admin.a', 'Admin A',       '{argon2@SpringSecurity_v5_8}$argon2id$v=19$m=16384,t=2,p=1$ZmljdGljaW8$ZmljdGljaW8', '00000000-0000-0000-0000-00000000000a'),
+    ('11111111-1111-1111-1111-000000000002', 'enf.a',   'Enfermeira A',  '{argon2@SpringSecurity_v5_8}$argon2id$v=19$m=16384,t=2,p=1$ZmljdGljaW8$ZmljdGljaW8', '00000000-0000-0000-0000-00000000000a'),
+    ('11111111-1111-1111-1111-000000000003', 'coord.b', 'Coordenação B', '{argon2@SpringSecurity_v5_8}$argon2id$v=19$m=16384,t=2,p=1$ZmljdGljaW8$ZmljdGljaW8', '00000000-0000-0000-0000-00000000000b');
 
 INSERT INTO fluxo.lotacao (usuario_id, unidade_id, papel) VALUES
     ('11111111-1111-1111-1111-000000000001', '00000000-0000-0000-0000-00000000000a', 'ADMINISTRADOR'),
     ('11111111-1111-1111-1111-000000000002', '00000000-0000-0000-0000-00000000000a', 'ENFERMAGEM'),
     ('11111111-1111-1111-1111-000000000003', '00000000-0000-0000-0000-00000000000b', 'COORDENACAO_FLUXO');
 
+-- Administrador da unidade B (gestão de usuários, V11).
+INSERT INTO fluxo.usuario (id, login, nome, senha_hash, unidade_gestora_id) VALUES
+    ('11111111-1111-1111-1111-000000000004', 'admin.b', 'Admin B', '{argon2@SpringSecurity_v5_8}$argon2id$v=19$m=16384,t=2,p=1$ZmljdGljaW8$ZmljdGljaW8', '00000000-0000-0000-0000-00000000000b');
+INSERT INTO fluxo.lotacao (usuario_id, unidade_id, papel) VALUES
+    ('11111111-1111-1111-1111-000000000004', '00000000-0000-0000-0000-00000000000b', 'ADMINISTRADOR');
+
 -- Unidade A amplia a retroatividade (parâmetro por unidade, RNF-017/RNF-018);
 -- a unidade B mantém o padrão (24 h).
 UPDATE fluxo.unidade SET retroatividade_maxima = interval '48 hours', versao = versao + 1
  WHERE id = '00000000-0000-0000-0000-00000000000a';
+

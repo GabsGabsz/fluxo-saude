@@ -20,10 +20,11 @@ SELECT teste.afirma((SELECT count(*) FROM fluxo.lotacao) = 2, 'lotações só da
 SELECT teste.espera_erro($$
     INSERT INTO fluxo.paciente (unidade_id, nome) VALUES ('00000000-0000-0000-0000-00000000000b', 'Fulano')
 $$, 'row-level security');
+-- Lotação: sem DML direto desde a V11 (só funções administrativas, com alcance conferido)
 SELECT teste.espera_erro($$
     INSERT INTO fluxo.lotacao (usuario_id, unidade_id, papel)
     VALUES ('11111111-1111-1111-1111-000000000002', '00000000-0000-0000-0000-00000000000b', 'ADMINISTRADOR')
-$$, 'row-level security');
+$$, 'permission denied');
 
 -- Não consegue "mover" um registro para outra unidade (WITH CHECK)
 INSERT INTO fluxo.paciente (id, unidade_id, nome)

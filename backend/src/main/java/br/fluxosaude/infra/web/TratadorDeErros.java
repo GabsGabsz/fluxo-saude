@@ -120,6 +120,11 @@ public class TratadorDeErros {
             // 404, 405, 415 etc. do próprio Spring MVC: mantém o status correto.
             return resposta(er.getStatusCode(), "REQUISICAO_NAO_ATENDIDA", "Requisição não atendida", req);
         }
+        if (e instanceof DataAccessException dae && "FX403".equals(sqlState(dae))) {
+            // Recusa administrativa do banco (V11) que não passou pelo adaptador: acesso negado.
+            LOG.info("operação administrativa recusada pelo banco (SQLSTATE FX403)");
+            return resposta(HttpStatus.FORBIDDEN, "ACESSO_NEGADO", "Acesso negado", req);
+        }
         if (e instanceof DataAccessException dae && "55000".equals(sqlState(dae))) {
             // object_not_in_prerequisite_state: gatilho recusou mudança de estado (ex.: pendência
             // já encerrada, campo imutável). Estado mudou sob o cliente → recarregar.

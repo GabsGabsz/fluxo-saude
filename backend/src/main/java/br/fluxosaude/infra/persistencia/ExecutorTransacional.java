@@ -73,11 +73,13 @@ public class ExecutorTransacional {
                 .single();
             return;
         }
-        // O banco confere usuário ativo + lotação na unidade e devolve os papéis vigentes.
-        Optional<Set<String>> papeis = jdbc.sql("SELECT fluxo.aplicar_contexto(?::uuid, ?::uuid, ?, ?)")
+        // O banco confere usuário ativo, versão de credencial da sessão (V12) e lotação na
+        // unidade, e devolve os papéis vigentes.
+        Optional<Set<String>> papeis = jdbc.sql("SELECT fluxo.aplicar_contexto(?::uuid, ?::uuid, ?, ?, ?)")
             .param(c.usuarioId().toString())
             .param(c.unidadeAtiva() == null ? null : c.unidadeAtiva().toString())
             .param(ip).param(correlacao)
+            .param(c.credencialVersao())
             .query((rs, n) -> {
                 Array a = rs.getArray(1);
                 if (a == null) {
