@@ -24,6 +24,13 @@ unidade**, não regras fixas (RN-014, Anexo B.3). Cada item indica a validação
 | 16 | Prazo de pendência: no máximo **30 dias** à frente | `Pendencia.PRAZO_MAXIMO` | V-05 |
 | 17 | Leitura do caso limitada a 1000 eventos, 200 pendências e 200 observações mais recentes (`historicoTruncado` sinaliza corte) | `Consultas` | V-10 |
 | 18 | Banco: espera por lock até **5 s** e consulta até **30 s** (acima disso: 409 / erro) | `application.yml` | V-10 |
+| 19 | **Alcance administrativo:** papéis por unidade = administrador da unidade; dados da conta, desativação e senha provisória = administrador da **unidade gestora** (a que criou a conta) que também administre **todas** as unidades do usuário (ADR-0006) | V11, `ServicoGestaoUsuarios` | V-06 |
+| 20 | **Sem autoalteração:** administrador não altera os próprios papéis, situação ou conta (só outro administrador) | V11 | V-06 |
+| 21 | **Último administrador:** toda unidade mantém ≥ 1 administrador ativo; a remoção que zeraria é recusada | V11 | V-06 |
+| 22 | Administrador pode conceder qualquer papel da unidade, inclusive Administrador e papéis com acesso nominal (ex.: Coordenação). Segregação de funções (ex.: dupla aprovação) não implementada — depende de processo institucional | V11 | V-06, V-08 |
+| 23 | Remover a última lotação **desativa** a conta; conta órfã só é reativada pelo DBA; vínculo entre unidades só de conta ativa, localizada pelo login exato; revogar o acesso na unidade gestora encerra a gestão da conta pela aplicação (DBA a partir daí) | V11 | V-06 |
+| 24 | Senha provisória gerada pelo sistema e exibida uma vez ao administrador, que a entrega ao profissional por canal seguro (procedimento institucional a definir) | `GeradorSenhaProvisoria` | V-10 |
+| 25 | **Limitação conhecida:** o contexto da transação (GUCs) pode ser definido pelo próprio papel da aplicação; as regras do banco não resistem a SQL arbitrário como `fluxo_app`. Proposta: contexto não forjável (etapa própria, afeta todas as políticas) | V1/V8 | V-10 |
 
 **Não decidido, e não deve ser decidido pelo desenvolvedor:** limites de alerta e SLA por etapa
 (V-05), níveis e destinatários de escalonamento (V-06), fórmulas oficiais dos indicadores (V-09),

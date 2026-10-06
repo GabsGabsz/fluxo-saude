@@ -8,6 +8,7 @@ Baseline: **ERS v1.1 (revisão técnica)**. Legenda: ✅ implementado e testado 
 | ID | Pri. | Status | Onde | Teste |
 |---|---|---|---|---|
 | RF-001 Autenticação e perfil | M | ✅ | módulo `identidade` (login, sessão, troca de senha, unidade ativa), `MatrizPermissoes`, V6–V8, ADR-0002 | `ServicoAutenticacaoTest`, `MatrizPermissoesTest`, `t05`, `SessaoIT` |
+| M08 Gestão de usuários e perfis (ERS §3, §5) | M | ✅ (API) | `ServicoGestaoUsuarios`, `/api/admin/usuarios`, funções `admin_*` (V11), ADR-0006: criação com senha provisória e troca obrigatória, papéis por unidade, revogação, vínculo de conta existente, desativação/senha só com alcance sobre a conta, sem autoalteração, último administrador garantido, sessões encerradas; telas ⬜ | `ServicoGestaoUsuariosTest`, `t08`, `concorrencia-administradores`, `GestaoUsuariosIT` |
 | RF-002 Abrir episódio | M | ✅ | `Episodio.abrir`, `ServicoEpisodios.abrir`, `POST /api/episodios` | `EpisodioTest`, `ServicosDeAplicacaoTest`, `t03`, `EpisodiosIT` |
 | RF-003 Detectar duplicidade **sem bloquear** (v1.1) | M | ✅ | justificativa obrigatória + evento `DUPLICIDADE_JUSTIFICADA`; banco serializa aberturas do mesmo paciente | `RegrasV11Test`, `t03` |
 | RF-004 Alterar etapa com autor e hora | M | ✅ | `mudarEtapa`, `PUT /api/episodios/{id}/etapa`, `transicao_etapa`, trigger `episodio_regras` | ambos, `EpisodiosIT` |
@@ -55,7 +56,7 @@ Baseline: **ERS v1.1 (revisão técnica)**. Legenda: ✅ implementado e testado 
 
 | RNF | Status |
 |---|---|
-| RNF-013 Credenciais (hash, MFA, sem compartilhamento) | 🟡 Argon2id + política NIST + bloqueio progressivo + limite de sessões ✅; MFA ⬜ |
+| RNF-013 Credenciais (hash, MFA, sem compartilhamento) | 🟡 Argon2id + política NIST + bloqueio progressivo + limite de sessões ✅; credencial individual provisionada pelo administrador com senha provisória aleatória e troca obrigatória ✅; MFA ⬜ |
 | RNF-014 Concorrência | ✅ `tg_versao` |
 | RNF-015 Privacidade visual | 🟡 `Pseudonimo`; tela ⬜ |
 | RNF-016 Acessibilidade (eMAG/WCAG) | ⬜ front-end |
@@ -67,7 +68,7 @@ Baseline: **ERS v1.1 (revisão técnica)**. Legenda: ✅ implementado e testado 
 | CA | Status |
 |---|---|
 | CA-01, 02, 03, 04, 08, 10, 12 | ✅ no domínio/banco (telas ⬜) |
-| CA-11 | ✅ RLS por unidade + permissões por perfil na unidade ativa + revalidação no banco a cada transação; registro de outra unidade responde 404 (`EpisodiosIT`) — telas ⬜ |
+| CA-11 | ✅ RLS por unidade + permissões por perfil na unidade ativa + revalidação no banco a cada transação; registro de outra unidade responde 404 (`EpisodiosIT`); administração restrita ao alcance da unidade/conta, revogação com sessão encerrada (`GestaoUsuariosIT`) — telas ⬜ |
 | CA-05, 06, 07, 09 | ⬜ |
 
 ## Anexo B.3 — decisões que o desenvolvedor não deve tomar sozinho
