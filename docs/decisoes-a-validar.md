@@ -37,6 +37,7 @@ unidade**, não regras fixas (RN-014, Anexo B.3). Cada item indica a validação
 | 30 | Quem configura regras: Administrador; quem vê travados: quem tem acesso nominal (`EPISODIO_VER`); quem registra ciência: `EPISODIO_ALTERAR` (coordenação, enfermagem, médico); painel coletivo só sinaliza "em alerta" | V13, `ServicoAlertas` | V-06 |
 | 31 | Ordem do painel de travados: limite atingido há mais tempo primeiro (critério operacional, não prioridade clínica) | `ServicoAlertas` | V-05 |
 | 32 | Escalonamento e notificações direcionadas **não implementados**: aguardam níveis, destinatários e tempos | — | V-05, V-06 |
+| 33 | A ciência vale para a versão da regra que o profissional viu: se o Administrador alterar limite ou ação esperada, a ciência anterior não vale para a nova versão e a tela precisa ser relida (409) | V14 | V-06 |
 | 25 | **Limitação conhecida:** o contexto da transação (GUCs) pode ser definido pelo próprio papel da aplicação; as regras do banco não resistem a SQL arbitrário como `fluxo_app`. Proposta: contexto não forjável (etapa própria, afeta todas as políticas) | V1/V8 | V-10 |
 
 **Não decidido, e não deve ser decidido pelo desenvolvedor:** limites de alerta e SLA por etapa

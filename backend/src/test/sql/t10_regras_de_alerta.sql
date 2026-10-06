@@ -73,9 +73,21 @@ SELECT teste.afirma(autor_id = :ENF, 'autor da ciência pelo banco') FROM fluxo.
 -- Mesma ocorrência não é registrada duas vezes
 SELECT teste.espera_erro(format($$ INSERT INTO fluxo.ciencia_alerta (id, unidade_id, episodio_id, regra_id, regra_versao, referencia_em)
     VALUES (gen_random_uuid(), %L, %L, %L, 1, now() - interval '3 hours') $$, :A, :EP, :R1), 'ciencia_alerta_ocorrencia_uq');
--- Regra alterada (outra versão): é outra ocorrência, sem ciência
+-- Só a versão VIGENTE da regra aceita ciência (V14): versão que não é a atual é recusada
+SELECT teste.espera_erro(format($$ INSERT INTO fluxo.ciencia_alerta (id, unidade_id, episodio_id, regra_id, regra_versao, referencia_em)
+    VALUES (gen_random_uuid(), %L, %L, %L, 0, now() - interval '3 hours') $$, :A, :EP, :R1), 'mudou desde a leitura');
+SELECT teste.espera_erro(format($$ INSERT INTO fluxo.ciencia_alerta (id, unidade_id, episodio_id, regra_id, regra_versao, referencia_em)
+    VALUES (gen_random_uuid(), %L, %L, %L, 2, now() - interval '3 hours') $$, :A, :EP, :R1), 'mudou desde a leitura');
+-- A regra mudou (versão 2): a mesma ocorrência na versão nova é outra ciência
+SELECT teste.ctx(:ADM_A, :A);
+UPDATE fluxo.regra_alerta SET acao_esperada = 'Acionar central e registrar protocolo', versao = versao + 1 WHERE id = :R1;
+SELECT teste.ctx(:ENF, :A);
 INSERT INTO fluxo.ciencia_alerta (id, unidade_id, episodio_id, regra_id, regra_versao, referencia_em)
 VALUES (gen_random_uuid(), :A, :EP, :R1, 2, now() - interval '3 hours');
+SELECT teste.afirma(array_agg(regra_versao ORDER BY regra_versao) = ARRAY[1, 2], 'uma ciência por versão vista')
+  FROM fluxo.ciencia_alerta WHERE episodio_id = :EP;
+-- Trava da regra para conferir a versão: alcance só da unidade do contexto
+SELECT teste.afirma(versao = 2 AND ativa, 'trava e devolve a versão vigente') FROM fluxo.travar_regra_alerta(:R1);
 -- Imutável
 SELECT teste.espera_erro(format($$ UPDATE fluxo.ciencia_alerta SET referencia_em = now() WHERE episodio_id = %L $$, :EP),
                          'permission denied');
@@ -93,7 +105,8 @@ SELECT teste.espera_erro(format($$ INSERT INTO fluxo.ciencia_alerta (id, unidade
 -- Outra unidade não registra ciência em episódio da A
 SELECT teste.ctx(:ADM_B, :B);
 SELECT teste.espera_erro(format($$ INSERT INTO fluxo.ciencia_alerta (id, unidade_id, episodio_id, regra_id, regra_versao, referencia_em)
-    VALUES (gen_random_uuid(), %L, %L, %L, 1, now()) $$, :A, :EP, :R1), 'row-level security');
+    VALUES (gen_random_uuid(), %L, %L, %L, 2, now()) $$, :A, :EP, :R1), 'row-level security');
+SELECT teste.afirma(NOT EXISTS (SELECT 1 FROM fluxo.travar_regra_alerta(:R1)), 'B não trava regra da A');
 SELECT teste.afirma((SELECT count(*) FROM fluxo.ciencia_alerta) = 0, 'B não vê ciências da A');
 
 -- Episódio encerrado não recebe ciência

@@ -24,7 +24,7 @@ Baseline: **ERS v1.1 (revisão técnica)**. Legenda: ✅ implementado e testado 
 | RF-016 / 017 Passagem de plantão | M | ⬜ | — | — |
 | RF-018 Pacientes travados (regras configuráveis) | M | ✅ (API) | `GET /api/travados`: só episódios abertos que violam regra ativa (tempo na etapa, tempo total, tempo bloqueado, sem atualização, pendência vencida), com tempos, motivo, pendências (próxima ação, responsável, prazo) e ação esperada; tela ⬜ | `MotorDeAlertasTest`, `ServicoAlertasTest`, `t10`, `AlertasIT` |
 | RF-021 Alertas direcionados a usuário/setor/perfil | S | ⬜ | depende de V-06 (destinatários) | — |
-| RF-022 Ciência do alerta sem encerrar pendência | S | ✅ (API) | `POST /api/episodios/{id}/alertas/ciencia`; `ciencia_alerta` imutável, auditada; por ocorrência e versão da regra | `ServicoAlertasTest`, `t10`, `AlertasIT` |
+| RF-022 Ciência do alerta sem encerrar pendência | S | ✅ (API) | `POST /api/episodios/{id}/alertas/ciencia`; `ciencia_alerta` imutável, auditada; por ocorrência e **versão da regra vista** (409 se mudou, V14) | `ServicoAlertasTest`, `t10`, `concorrencia-ciencia`, `AlertasIT` |
 | RF-023 Escalonamento após tempo configurado | S | ⬜ | depende de V-05/V-06 (níveis, destinatários, tempos) | — |
 | RF-019 / 020 Indicadores | M | ⬜ | eventos com horário do servidor como base | — |
 | RF-027 Parametrizar etapas, motivos, encerramento | S | 🟡 | tabelas + provisionamento; **limites de alerta por unidade/etapa** (`/api/config/regras-alerta`, só Administrador, V13) ✅; faltam telas e escalonamento | `t03`, `o02`, `t10`, `AlertasIT` |

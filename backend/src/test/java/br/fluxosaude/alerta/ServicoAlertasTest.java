@@ -83,7 +83,20 @@ class ServicoAlertasTest {
             ciencias.forEach((k, v) -> { if (ids.contains(k.episodioId())) { m.put(k, v); } });
             return m;
         }
+        /** Executado no instante da trava: simula uma alteração da regra confirmada antes dela. */
+        Runnable antesDeTravar = () -> { };
+        final List<String> ordem = new ArrayList<>();
+
+        @Override public Optional<EstadoRegra> travarRegra(UUID regraId) {
+            antesDeTravar.run();
+            ordem.add("trava-regra");
+            return Optional.ofNullable(regras.get(regraId)).map(r -> new EstadoRegra(r.versao(), r.ativa()));
+        }
         @Override public boolean registrarCiencia(UUID id, Ocorrencia o) {
+            ordem.add("grava-ciencia");
+            if (regras.get(o.regraId()).versao() != o.regraVersao()) {
+                throw new ConflitoDeVersaoException(); // como o gatilho da V14
+            }
             if (ciencias.containsKey(o)) {
                 return false;
             }
@@ -166,40 +179,92 @@ class ServicoAlertasTest {
         assertEquals(1, servico.regras(enf, ORIGEM).size(), "quem acompanha os casos lê as regras");
         assertEquals(1, servico.regras(adm, ORIGEM).size());
         assertThrows(AcessoNegadoException.class, () -> servico.registrarCiencia(direcao, ORIGEM,
-                new ServicoAlertas.PedidoCiencia(ep, UUID.randomUUID(), AGORA, null)));
+                new ServicoAlertas.PedidoCiencia(ep, UUID.randomUUID(), 0, AGORA, null)));
     }
 
     @Test
-    @DisplayName("Ciência: só de alerta ativo, idempotente, não encerra pendência e aparece no painel")
+    @DisplayName("Ciência na versão vista: regra alterada → 409 sem gravar; relida → registra; idempotente; não encerra pendência")
     void ciencia() {
         UsuarioAutenticado adm = usuario(Papel.ADMINISTRADOR);
         RegraAlerta pend = servico.criarRegra(adm, ORIGEM, new ServicoAlertas.NovaRegra("Pendência vencida",
-                TipoRegraAlerta.PENDENCIA_VENCIDA, null, null, null, null));
+                TipoRegraAlerta.PENDENCIA_VENCIDA, null, null, null, "Cobrar o responsável"));
         UUID pid = UUID.randomUUID();
         Instant prazo = AGORA.minus(Duration.ofMinutes(10));
         UUID ep = banco.episodio(ETAPA_ATENDIMENTO, Duration.ofHours(1),
                 List.of(new SituacaoEpisodio.PendenciaAberta(pid, CategoriaBloqueio.LOGISTICA, prazo)));
         UsuarioAutenticado enf = usuario(Papel.ENFERMAGEM);
-        var ocorrencia = new ServicoAlertas.PedidoCiencia(ep, pend.id(), prazo, pid);
-        assertNull(servico.travados(enf, ORIGEM).itens().get(0).alertas().get(0).ciencia());
-        assertTrue(servico.registrarCiencia(enf, ORIGEM, ocorrencia));
-        assertFalse(servico.registrarCiencia(enf, ORIGEM, ocorrencia), "idempotente");
+
+        // Lê o alerta na versão 0
+        var lidoV0 = servico.travados(enf, ORIGEM).itens().get(0).alertas().get(0);
+        assertEquals(0, lidoV0.alerta().regraVersao());
+        assertNull(lidoV0.ciencia());
+        var pedidoV0 = new ServicoAlertas.PedidoCiencia(ep, pend.id(), lidoV0.alerta().regraVersao(),
+                lidoV0.alerta().referenciaEm(), pid);
+
+        // O administrador altera a regra (ação esperada) → versão 1; o alerta continua ativo, mesma referência
+        servico.alterarRegra(adm, ORIGEM, pend.id(), 0, new ServicoAlertas.AlteracaoRegra("Pendência vencida", null,
+                null, null, "Cobrar o responsável e registrar no plantão", true));
+
+        // Pedido antigo (versão 0, que ninguém mais vê): 409 e nada registrado
+        assertThrows(ConflitoDeVersaoException.class, () -> servico.registrarCiencia(enf, ORIGEM, pedidoV0));
+        var aindaSem = servico.travados(enf, ORIGEM).itens().get(0).alertas().get(0);
+        assertEquals(1, aindaSem.alerta().regraVersao());
+        assertEquals(lidoV0.alerta().referenciaEm(), aindaSem.alerta().referenciaEm(), "mesma referência");
+        assertNull(aindaSem.ciencia(), "versão 1 continua sem ciência");
+        assertTrue(banco.ciencias.isEmpty());
+
+        // Relê e confirma a versão 1; repetir é idempotente
+        var pedidoV1 = new ServicoAlertas.PedidoCiencia(ep, pend.id(), aindaSem.alerta().regraVersao(),
+                aindaSem.alerta().referenciaEm(), pid);
+        assertTrue(servico.registrarCiencia(enf, ORIGEM, pedidoV1));
+        assertFalse(servico.registrarCiencia(enf, ORIGEM, pedidoV1), "idempotente na mesma versão");
+        assertEquals(1, banco.ciencias.size());
+        assertEquals(1, banco.ciencias.keySet().iterator().next().regraVersao(), "gravada na versão enviada");
         var visto = servico.travados(enf, ORIGEM).itens().get(0).alertas().get(0);
         assertNotNull(visto.ciencia(), "continua travado, agora com ciência");
         assertEquals(1, banco.abertos.get(ep).situacao().pendencias().size(), "pendência continua aberta");
+
+        // Versão negativa é inválida; versão futura (inexistente) também não é a vigente → 409
+        assertEquals("VERSAO_INVALIDA", assertThrows(RegraVioladaException.class,
+                () -> new ServicoAlertas.PedidoCiencia(ep, pend.id(), -1, prazo, pid)).codigo());
+        assertThrows(ConflitoDeVersaoException.class, () -> servico.registrarCiencia(enf, ORIGEM,
+                new ServicoAlertas.PedidoCiencia(ep, pend.id(), 7, prazo, pid)));
         // Ocorrência que não está em alerta (ex.: outro prazo, já resolvida) é recusada
         assertEquals("ALERTA_INEXISTENTE", assertThrows(RegraVioladaException.class, () -> servico.registrarCiencia(enf,
-                ORIGEM, new ServicoAlertas.PedidoCiencia(ep, pend.id(), prazo.plusSeconds(1), pid))).codigo());
-        // Regra alterada (ex.: limite revisto) = nova ocorrência: a ciência anterior não vale mais
-        UsuarioAutenticado admin = usuario(Papel.ADMINISTRADOR);
-        servico.alterarRegra(admin, ORIGEM, pend.id(), 0, new ServicoAlertas.AlteracaoRegra("Pendência vencida (revista)",
-                null, null, null, null, true));
-        assertNull(servico.travados(enf, ORIGEM).itens().get(0).alertas().get(0).ciencia(), "nova versão da regra");
-        assertTrue(servico.registrarCiencia(enf, ORIGEM, ocorrencia));
+                ORIGEM, new ServicoAlertas.PedidoCiencia(ep, pend.id(), 1, prazo.plusSeconds(1), pid))).codigo());
         // Episódio que não está aberto (encerrado ou de outra unidade): 404
         assertThrows(RecursoNaoEncontradoException.class, () -> servico.registrarCiencia(enf, ORIGEM,
-                new ServicoAlertas.PedidoCiencia(UUID.randomUUID(), pend.id(), prazo, pid)));
+                new ServicoAlertas.PedidoCiencia(UUID.randomUUID(), pend.id(), 1, prazo, pid)));
     }
+
+    @Test
+    @DisplayName("Concorrência: alteração da regra confirmada entre a leitura e a trava → 409, sem gravar; "
+            + "a regra é travada ANTES de gravar")
+    void cienciaConcorrenteComAlteracaoDaRegra() {
+        UsuarioAutenticado adm = usuario(Papel.ADMINISTRADOR);
+        RegraAlerta total = servico.criarRegra(adm, ORIGEM, new ServicoAlertas.NovaRegra("Permanência",
+                TipoRegraAlerta.TEMPO_TOTAL, null, null, Duration.ofMinutes(30), null));
+        UUID ep = banco.episodio(ETAPA_ATENDIMENTO, Duration.ofHours(1), List.of());
+        UsuarioAutenticado enf = usuario(Papel.ENFERMAGEM);
+        var lido = servico.travados(enf, ORIGEM).itens().get(0).alertas().get(0).alerta();
+        var pedido = new ServicoAlertas.PedidoCiencia(ep, total.id(), lido.regraVersao(), lido.referenciaEm(), null);
+        // Ponto exato da corrida: a alteração confirma imediatamente antes da trava da ciência
+        banco.antesDeTravar = () -> {
+            banco.antesDeTravar = () -> { };
+            servico.alterarRegra(adm, ORIGEM, total.id(), 0, new ServicoAlertas.AlteracaoRegra("Permanência",
+                    null, null, Duration.ofMinutes(20), null, true));
+        };
+        assertThrows(ConflitoDeVersaoException.class, () -> servico.registrarCiencia(enf, ORIGEM, pedido));
+        assertTrue(banco.ciencias.isEmpty(), "não confirma versão diferente da enviada");
+        assertEquals(List.of("trava-regra"), banco.ordem, "trava antes de qualquer gravação; nada gravado");
+        // Relendo, a confirmação vai na versão nova
+        var relido = servico.travados(enf, ORIGEM).itens().get(0).alertas().get(0).alerta();
+        assertEquals(1, relido.regraVersao());
+        assertTrue(servico.registrarCiencia(enf, ORIGEM,
+                new ServicoAlertas.PedidoCiencia(ep, total.id(), 1, relido.referenciaEm(), null)));
+        assertEquals(List.of("trava-regra", "trava-regra", "grava-ciencia"), banco.ordem);
+    }
+
 
     @Test
     @DisplayName("Configuração: versão, regra sem mudança não incrementa, etapa de outra unidade recusada, desativação")

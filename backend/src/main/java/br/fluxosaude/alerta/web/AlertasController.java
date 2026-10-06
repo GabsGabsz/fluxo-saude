@@ -34,7 +34,8 @@ import org.springframework.web.bind.annotation.RestController;
  * Alertas operacionais e "Pacientes travados" (M04, RF-018, RF-022, RF-027; ADR-0007).
  * <pre>
  * GET  /api/travados                              casos que violam regras ativas (tempo, motivo, responsável, ação)
- * POST /api/episodios/{id}/alertas/ciencia        "ciente" de uma ocorrência em alerta (não encerra pendência)
+ * POST /api/episodios/{id}/alertas/ciencia        "ciente" de uma ocorrência em alerta, na versão da regra vista
+ *                                                 (409 se a regra mudou; não encerra pendência)
  * GET  /api/config/regras-alerta                  regras da unidade ativa
  * POST /api/config/regras-alerta                  cria regra (Administrador)
  * PUT  /api/config/regras-alerta/{id}             altera/desativa regra (Administrador; versão obrigatória)
@@ -52,11 +53,13 @@ class AlertasController {
     record CienciaDto(String autorNome, Instant registradaEm) {
     }
 
-    record AlertaDto(UUID regraId, String regraNome, TipoRegraAlerta tipo, Instant referenciaEm, Instant atingidoEm,
-                     UUID pendenciaId, Long limiteMinutos, String acaoEsperada, CienciaDto ciencia) {
+    /** {@code regraVersao}: versão da regra exibida — deve voltar no pedido de ciência. */
+    record AlertaDto(UUID regraId, int regraVersao, String regraNome, TipoRegraAlerta tipo, Instant referenciaEm,
+                     Instant atingidoEm, UUID pendenciaId, Long limiteMinutos, String acaoEsperada, CienciaDto ciencia) {
         static AlertaDto de(ServicoAlertas.AlertaVisto v) {
             var a = v.alerta();
-            return new AlertaDto(a.regraId(), a.regraNome(), a.tipo(), a.referenciaEm(), a.atingidoEm(), a.pendenciaId(),
+            return new AlertaDto(a.regraId(), a.regraVersao(), a.regraNome(), a.tipo(), a.referenciaEm(), a.atingidoEm(),
+                    a.pendenciaId(),
                     a.limite() == null ? null : a.limite().toMinutes(), a.acaoEsperada(),
                     v.ciencia() == null ? null : new CienciaDto(v.ciencia().autorNome(), v.ciencia().registradaEm()));
         }
@@ -79,7 +82,9 @@ class AlertasController {
     record TravadosResponse(Instant agora, List<CasoDto> itens, boolean truncado) {
     }
 
-    record CienciaRequest(@NotNull UUID regraId, @NotNull Instant referenciaEm, UUID pendenciaId) {
+    /** {@code regraVersao}: a versão da regra que o profissional viu (obrigatória; 409 se mudou). */
+    record CienciaRequest(@NotNull UUID regraId, @NotNull @Min(0) Integer regraVersao, @NotNull Instant referenciaEm,
+                          UUID pendenciaId) {
     }
 
     record CienciaResponse(boolean registrada) {
@@ -121,7 +126,7 @@ class AlertasController {
     ResponseEntity<CienciaResponse> ciencia(@PathVariable UUID id, @Valid @RequestBody CienciaRequest c,
                                             HttpServletRequest req) {
         boolean nova = servico.registrarCiencia(usuario(), provedor.origem(req),
-                new ServicoAlertas.PedidoCiencia(id, c.regraId(), c.referenciaEm(), c.pendenciaId()));
+                new ServicoAlertas.PedidoCiencia(id, c.regraId(), c.regraVersao(), c.referenciaEm(), c.pendenciaId()));
         return ResponseEntity.status(nova ? HttpStatus.CREATED : HttpStatus.OK).body(new CienciaResponse(nova));
     }
 

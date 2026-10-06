@@ -8,7 +8,7 @@ quanto tempo aguardam, registra o gargalo atual, define a próxima ação e o re
 
 | Camada | Conteúdo | Verificação |
 |---|---|---|
-| Banco (PostgreSQL 16) | Esquema do núcleo, regras críticas em `CHECK`/triggers, RLS por unidade (inclusive usuários e auditoria), auditoria imutável com cadeia SHA-256, login por funções controladas, observações (V9), margem de relógio (V10), gestão de usuários só por funções com alcance conferido (V11), versão de credencial conferida em toda transação (V12), regras de alerta e ciência (V13) | `backend/src/test/sql` — 13 suítes + 4 testes de concorrência |
+| Banco (PostgreSQL 16) | Esquema do núcleo, regras críticas em `CHECK`/triggers, RLS por unidade (inclusive usuários e auditoria), auditoria imutável com cadeia SHA-256, login por funções controladas, observações (V9), margem de relógio (V10), gestão de usuários só por funções com alcance conferido (V11), versão de credencial conferida em toda transação (V12), regras de alerta e ciência (V13), ciência só na versão da regra vista (V14) | `backend/src/test/sql` — 13 suítes + 5 testes de concorrência |
 | Domínio (Java 21, sem framework) | `Episodio`, `Pendencia`, `FluxoConfigurado`, ajuste manual de horário, pseudônimo, UUIDv7 | 45 testes JUnit, incl. o cenário completo da ERS §11 |
 | Identidade (núcleo puro) | Política de senha, limitadores, matriz de permissões, serviço de autenticação | `ServicoAutenticacaoTest`, `MatrizPermissoesTest`, ... |
 | Casos de uso (núcleo puro) | `ServicoEpisodios`, `ServicoPendencias`, `ServicoConsultas`: permissão na unidade ativa, versão lida (409), ajuste manual de horário, painel pseudonimizado | `ServicosDeAplicacaoTest` (portas em memória) |
@@ -72,12 +72,12 @@ unidade — **nenhuma vem cadastrada**; ver [ADR-0007](docs/adr/0007-alertas-e-t
 | Método | Caminho | Uso |
 |---|---|---|
 | GET | `/api/travados` | episódios abertos que violam regra ativa: tempos, motivo, pendências (responsável, prazo), alertas, ação esperada |
-| POST | `/api/episodios/{id}/alertas/ciencia` | "ciente" de uma ocorrência em alerta (`regraId`, `referenciaEm`, `pendenciaId`); não encerra pendência |
+| POST | `/api/episodios/{id}/alertas/ciencia` | "ciente" de uma ocorrência em alerta, na versão da regra **vista**: `regraId`, `regraVersao` (obrigatória, ≥ 0), `referenciaEm`, `pendenciaId`. Regra alterada desde a leitura → **409** (reler); sem alerta ativo → 422; regra/episódio fora do alcance → 404. Não encerra pendência |
 | GET | `/api/config/regras-alerta` | regras da unidade ativa |
 | POST | `/api/config/regras-alerta` | cria regra (Administrador): `nome`, `tipo`, `etapaId`, `categoria`, `limiteMinutos`, `acaoEsperada` |
 | PUT | `/api/config/regras-alerta/{id}` | altera/desativa (`versao` obrigatória) |
 
-A Torre (`GET /api/episodios`) traz `alertas` por episódio listado; o painel coletivo, só `emAlerta`.
+A Torre (`GET /api/episodios`) traz `alertas` por episódio listado (com `regraVersao`); o painel coletivo, só `emAlerta`.
 
 API de administração de usuários (perfil Administrador, sempre na **unidade ativa**; toda
 alteração envia a `versao` lida → 409 se mudou; ver [ADR-0006](docs/adr/0006-gestao-de-usuarios.md)):

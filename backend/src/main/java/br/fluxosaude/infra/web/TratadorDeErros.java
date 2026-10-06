@@ -125,6 +125,11 @@ public class TratadorDeErros {
             LOG.info("operação administrativa recusada pelo banco (SQLSTATE FX403)");
             return resposta(HttpStatus.FORBIDDEN, "ACESSO_NEGADO", "Acesso negado", req);
         }
+        if (e instanceof DataAccessException dae && "FX409".equals(sqlState(dae))) {
+            // Versão vista desatualizada recusada pelo banco (V14) sem passar pelo adaptador.
+            return resposta(HttpStatus.CONFLICT, "CONFLITO_DE_VERSAO",
+                    "O registro foi alterado por outra pessoa. Recarregue e tente novamente.", req);
+        }
         if (e instanceof DataAccessException dae && "55000".equals(sqlState(dae))) {
             // object_not_in_prerequisite_state: gatilho recusou mudança de estado (ex.: pendência
             // já encerrada, campo imutável). Estado mudou sob o cliente → recarregar.

@@ -46,6 +46,19 @@ operacional derivada de tempo, pendência ou falta de atualização (Anexo B).
    episódio, regra, **versão da regra**, instante de referência e pendência: mudou a situação
    ou a regra, é nova ocorrência. Não encerra pendência nem tira o caso do painel. Imutável,
    auditada, idempotente. Exige `EPISODIO_ALTERAR`.
+5. **Ciência na versão VISTA (V14, revisão do PR #7):** os alertas expõem `regraVersao` e o
+   pedido de ciência a envia (obrigatória). Se a regra mudou desde a leitura (limite, ação
+   esperada...), a resposta é **409** e nada é gravado — a ciência nunca é "promovida" para uma
+   versão que o profissional não viu; ele relê e confirma a nova. Idempotente para a mesma
+   ocorrência e versão. Regra inexistente ou de outra unidade → 404.
+
+   **Concorrência — ordem única de bloqueio: regra → cabeça da auditoria.** A ciência trava a
+   regra (`fluxo.travar_regra_alerta`, `FOR SHARE`) antes de conferir a versão e de gravar; a
+   alteração da regra bloqueia a mesma linha (`UPDATE`) antes de auditar. Se a alteração
+   confirma antes, a trava devolve a versão nova (409); se a ciência trava antes, a alteração
+   espera. O gatilho de inserção confere de novo, sob a mesma trava (`FX409`). Coberto de forma
+   determinística por `concorrencia-ciencia.sh` (sessões controladas, avanço só quando o banco
+   confirma o estado de espera) e por `ServicoAlertasTest`.
 
 ## Fora desta etapa (dependem de definição institucional)
 

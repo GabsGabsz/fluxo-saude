@@ -20,6 +20,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Collectors;
+import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.simple.JdbcClient;
 
 /**
@@ -174,7 +175,27 @@ final class RepositorioAlertasJdbc implements RepositorioAlertas {
     }
 
     @Override
+    public Optional<EstadoRegra> travarRegra(UUID regraId) {
+        return jdbc.sql("SELECT versao, ativa FROM fluxo.travar_regra_alerta(?)")
+            .param(regraId)
+            .query((rs, n) -> new EstadoRegra(rs.getInt(1), rs.getBoolean(2)))
+            .optional();
+    }
+
+    @Override
     public boolean registrarCiencia(UUID id, Ocorrencia o) {
+        try {
+            return inserirCiencia(id, o);
+        } catch (DataAccessException e) {
+            // FX409 (V14): a regra não está mais na versão enviada.
+            if (e.getMostSpecificCause() instanceof SQLException s && "FX409".equals(s.getSQLState())) {
+                throw new ConflitoDeVersaoException();
+            }
+            throw e;
+        }
+    }
+
+    private boolean inserirCiencia(UUID id, Ocorrencia o) {
         return jdbc.sql("""
                 INSERT INTO fluxo.ciencia_alerta (id, unidade_id, episodio_id, regra_id, regra_versao, referencia_em,
                                                   pendencia_id)

@@ -34,6 +34,10 @@ public interface RepositorioAlertas {
     record Ciencia(String autorNome, Instant registradaEm) {
     }
 
+    /** Versão e situação vigentes de uma regra, lidas com a regra TRAVADA até o fim da transação. */
+    record EstadoRegra(int versao, boolean ativa) {
+    }
+
     List<RegraAlerta> regras(boolean somenteAtivas);
 
     Optional<RegraAlerta> regra(UUID id);
@@ -54,6 +58,16 @@ public interface RepositorioAlertas {
     /** Ciências já registradas para os episódios informados. */
     Map<Ocorrencia, Ciencia> ciencias(Collection<UUID> episodioIds);
 
-    /** Registra a ciência; {@code false} se a mesma ocorrência já tinha ciência. */
+    /**
+     * Trava a regra (FOR SHARE, até o fim da transação) e devolve versão e situação vigentes;
+     * vazio se não existir na unidade ativa. Uma alteração concorrente da regra espera esta
+     * transação terminar (ou, se confirmou antes, a versão devolvida já é a nova).
+     */
+    Optional<EstadoRegra> travarRegra(UUID regraId);
+
+    /**
+     * Registra a ciência; {@code false} se a mesma ocorrência (na mesma versão) já tinha ciência.
+     * O banco recusa versão diferente da vigente com {@code ConflitoDeVersaoException}.
+     */
     boolean registrarCiencia(UUID id, Ocorrencia ocorrencia);
 }

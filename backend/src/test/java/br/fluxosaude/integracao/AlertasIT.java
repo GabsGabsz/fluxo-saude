@@ -169,18 +169,46 @@ class AlertasIT extends IntegracaoBase {
         exigir(403, adm.enviar("GET", "/api/travados", null));
         JsonNode daOutra = json.readTree(exigir(200, outra.enviar("GET", "/api/travados", null)).body());
         assertEquals(0, daOutra.get("itens").size(), "outra unidade não vê os travados");
-        String corpoCiencia = "{\"regraId\":\"" + texto(rTransporte.get("id")) + "\",\"referenciaEm\":\""
-                + texto(alerta1.get("referenciaEm")) + "\"}";
-        exigir(404, outra.enviar("POST", "/api/episodios/" + e1 + "/alertas/ciencia", corpoCiencia));
-        exigir(403, direcao.enviar("POST", "/api/episodios/" + e1 + "/alertas/ciencia", corpoCiencia));
+        // O alerta lido traz a versão da regra (Torre e /api/travados)
+        assertEquals(0, alerta1.get("regraVersao").asInt());
+        assertEquals(0, destaques.get(e1.toString()).get(0).get("regraVersao").asInt());
+        String idTransporte = texto(rTransporte.get("id"));
+        String referencia1 = texto(alerta1.get("referenciaEm"));
+        String pedidoV0 = corpoCiencia(idTransporte, "0", referencia1, null);
+        exigir(404, outra.enviar("POST", "/api/episodios/" + e1 + "/alertas/ciencia", pedidoV0));
+        exigir(403, direcao.enviar("POST", "/api/episodios/" + e1 + "/alertas/ciencia", pedidoV0));
 
-        // ------------------------------------------------------------ ciência (RF-022)
+        // ------------------------------------------------------------ ciência na versão vista (RF-022)
+        // O administrador altera a ação esperada → regra na versão 1; alerta ativo, mesma referência
+        exigir(200, adm.enviar("PUT", "/api/config/regras-alerta/" + idTransporte, """
+                {"versao":0,"nome":"Transporte atrasado (ilustrativo)","etapaId":"%s","limiteMinutos":120,
+                 "acaoEsperada":"Acionar a central e avisar o plantao","ativa":true}"""
+                .formatted(idEtapa("AGUARDANDO_TRANSPORTE"))));
+        // Tela antiga (versão 0): 409, nada registrado
+        HttpResponse<String> desatualizado = coord.enviar("POST", "/api/episodios/" + e1 + "/alertas/ciencia", pedidoV0);
+        exigir(409, desatualizado);
+        assertTrue(desatualizado.body().contains("CONFLITO_DE_VERSAO"));
+        JsonNode relido = item(json.readTree(exigir(200, coord.enviar("GET", "/api/travados", null)).body()), e1)
+                .get("alertas").get(0);
+        assertEquals(1, relido.get("regraVersao").asInt());
+        assertEquals(referencia1, texto(relido.get("referenciaEm")), "mesma ocorrência");
+        assertEquals("Acionar a central e avisar o plantao", texto(relido.get("acaoEsperada")));
+        JsonNode semCienciaV1 = relido.get("ciencia");
+        assertTrue(semCienciaV1 == null || "null".equals(semCienciaV1.toString()), "versão 1 continua sem ciência");
+        // Versão ausente ou negativa: 400
+        exigir(400, coord.enviar("POST", "/api/episodios/" + e1 + "/alertas/ciencia",
+                corpoCiencia(idTransporte, null, referencia1, null)));
+        exigir(400, coord.enviar("POST", "/api/episodios/" + e1 + "/alertas/ciencia",
+                corpoCiencia(idTransporte, "-1", referencia1, null)));
+        // Relida, confirma a versão 1; repetir é idempotente
+        String corpoCiencia = corpoCiencia(idTransporte, "1", referencia1, null);
         exigir(201, coord.enviar("POST", "/api/episodios/" + e1 + "/alertas/ciencia", corpoCiencia));
         exigir(200, coord.enviar("POST", "/api/episodios/" + e1 + "/alertas/ciencia", corpoCiencia));
         exigir(422, coord.enviar("POST", "/api/episodios/" + e2 + "/alertas/ciencia",
-                "{\"regraId\":\"" + texto(rTransporte.get("id")) + "\",\"referenciaEm\":\"" + agora + "\"}"));
-        String cienciaPend = "{\"regraId\":\"" + texto(rPendencia.get("id")) + "\",\"referenciaEm\":\""
-                + texto(caso4.get("alertas").get(0).get("referenciaEm")) + "\",\"pendenciaId\":\"" + pend + "\"}";
+                corpoCiencia(idTransporte, "1", agora.toString(), null)));
+        String cienciaPend = corpoCiencia(texto(rPendencia.get("id")),
+                String.valueOf(caso4.get("alertas").get(0).get("regraVersao").asInt()),
+                texto(caso4.get("alertas").get(0).get("referenciaEm")), pend.toString());
         exigir(201, coord.enviar("POST", "/api/episodios/" + e4 + "/alertas/ciencia", cienciaPend));
         travados = json.readTree(exigir(200, coord.enviar("GET", "/api/travados", null)).body());
         JsonNode ciencia = item(travados, e1).get("alertas").get(0).get("ciencia");
@@ -218,14 +246,36 @@ class AlertasIT extends IntegracaoBase {
             ps.setObject(2, unidade);
             try (ResultSet rs = ps.executeQuery()) {
                 assertTrue(rs.next());
-                assertEquals(4, rs.getLong(1), "3 regras criadas + 1 alteração auditadas");
-                assertEquals(2, rs.getLong(2), "ciências auditadas (a repetida não grava)");
+                assertEquals(5, rs.getLong(1), "3 regras criadas + 2 alterações auditadas");
+                assertEquals(2, rs.getLong(2), "ciências auditadas (a repetida e a recusada não gravam)");
+                assertEquals(0, contarCienciasNaVersao(e1, 0), "nenhuma ciência na versão 0 (não vista após a alteração)");
                 assertEquals(0, rs.getLong(3), "cadeia íntegra");
             }
         }
     }
 
     // ----------------------------------------------------------------------------
+
+    private static String corpoCiencia(String regraId, String versao, String referencia, String pendencia) {
+        return "{\"regraId\":\"" + regraId + "\""
+                + (versao == null ? "" : ",\"regraVersao\":" + versao)
+                + ",\"referenciaEm\":\"" + referencia + "\""
+                + (pendencia == null ? "" : ",\"pendenciaId\":\"" + pendencia + "\"")
+                + "}";
+    }
+
+    private static long contarCienciasNaVersao(UUID episodio, int versao) throws Exception {
+        try (Connection c = conexaoDono();
+             PreparedStatement ps = c.prepareStatement(
+                     "SELECT count(*) FROM fluxo.ciencia_alerta WHERE episodio_id = ? AND regra_versao = ?")) {
+            ps.setObject(1, episodio);
+            ps.setInt(2, versao);
+            try (ResultSet rs = ps.executeQuery()) {
+                rs.next();
+                return rs.getLong(1);
+            }
+        }
+    }
 
     private UUID abrir(ClienteHttp c, String nome, Instant entrada) throws Exception {
         return UUID.fromString(texto(json.readTree(exigir(201, c.enviar("POST", "/api/episodios", """

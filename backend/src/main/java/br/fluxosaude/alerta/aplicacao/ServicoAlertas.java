@@ -66,8 +66,19 @@ public final class ServicoAlertas {
                                  String acaoEsperada, boolean ativa) {
     }
 
-    /** Ocorrência indicada pelo cliente (a versão da regra é a vigente, conferida no servidor). */
-    public record PedidoCiencia(UUID episodioId, UUID regraId, Instant referenciaEm, UUID pendenciaId) {
+    /**
+     * Ocorrência indicada pelo cliente, com a VERSÃO DA REGRA que o profissional viu. Se a regra
+     * mudou desde então (limite, ação esperada...), a ciência é recusada com 409 — nunca é
+     * registrada numa versão que ele não viu.
+     */
+    public record PedidoCiencia(UUID episodioId, UUID regraId, int regraVersao, Instant referenciaEm,
+                                UUID pendenciaId) {
+        public PedidoCiencia {
+            Objects.requireNonNull(episodioId, "episódio");
+            Objects.requireNonNull(regraId, "regra");
+            Objects.requireNonNull(referenciaEm, "referência");
+            exigir(regraVersao >= 0, "VERSAO_INVALIDA", "Versão da regra inválida");
+        }
     }
 
     private final TransacaoAlertas transacao;
@@ -167,21 +178,32 @@ public final class ServicoAlertas {
     // ------------------------------------------------------------------- ciência (RF-022)
 
     /**
-     * Registra a ciência de uma ocorrência que está EM ALERTA AGORA (recalculada no servidor;
-     * não se registra ciência de alerta inexistente ou já resolvido). Idempotente.
+     * Registra a ciência de uma ocorrência que está EM ALERTA AGORA, na versão da regra que o
+     * profissional viu. Ordem (a mesma da alteração de regra: regra antes da auditoria):
+     * <ol>
+     *   <li>trava a regra e lê a versão vigente — versão diferente da vista → 409, nada gravado;</li>
+     *   <li>recalcula os alertas no servidor com a regra travada — ocorrência inexistente → 422;</li>
+     *   <li>grava a ciência na versão enviada (o banco confere de novo, sob a mesma trava).</li>
+     * </ol>
+     * Idempotente para a mesma ocorrência e versão.
      *
      * @return {@code true} se registrou; {@code false} se já havia ciência
      */
     public boolean registrarCiencia(UsuarioAutenticado u, ContextoOrigem origem, PedidoCiencia p) {
         AcessoNegadoException.exigir(u, Permissao.EPISODIO_ALTERAR);
         Objects.requireNonNull(p, "ocorrência");
-        Objects.requireNonNull(p.episodioId());
         Instant agora = relogio.instant();
         return transacao.executar(u, origem, r -> {
             RepositorioAlertas.EpisodioMonitorado e = r.episodiosAbertos(List.of(p.episodioId())).stream().findFirst()
                     .orElseThrow(() -> new RecursoNaoEncontradoException("Episódio aberto"));
+            RepositorioAlertas.EstadoRegra vigente = r.travarRegra(p.regraId())
+                    .orElseThrow(() -> new RecursoNaoEncontradoException("Regra de alerta"));
+            if (vigente.versao() != p.regraVersao()) {
+                throw new ConflitoDeVersaoException(); // a regra mudou desde a leitura: reler o alerta
+            }
             Alerta alerta = MotorDeAlertas.avaliar(e.situacao(), r.regras(true), agora).stream()
-                    .filter(a -> a.regraId().equals(p.regraId()) && a.referenciaEm().equals(p.referenciaEm())
+                    .filter(a -> a.regraId().equals(p.regraId()) && a.regraVersao() == p.regraVersao()
+                            && a.referenciaEm().equals(p.referenciaEm())
                             && Objects.equals(a.pendenciaId(), p.pendenciaId()))
                     .findFirst()
                     .orElse(null);

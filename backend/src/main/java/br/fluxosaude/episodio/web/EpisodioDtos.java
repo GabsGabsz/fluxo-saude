@@ -103,12 +103,13 @@ final class EpisodioDtos {
      * Destaque de alerta OPERACIONAL na Torre (RF-011): não é risco clínico nem prioridade (RN-013).
      * Os detalhes (responsável, ação esperada) estão em /api/travados.
      */
-    record AlertaResumo(UUID regraId, String regraNome, br.fluxosaude.alerta.dominio.TipoRegraAlerta tipo,
-                        Instant referenciaEm, Instant atingidoEm, UUID pendenciaId, boolean ciente) {
+    record AlertaResumo(UUID regraId, int regraVersao, String regraNome,
+                        br.fluxosaude.alerta.dominio.TipoRegraAlerta tipo, Instant referenciaEm, Instant atingidoEm,
+                        UUID pendenciaId, boolean ciente) {
         static AlertaResumo de(br.fluxosaude.alerta.aplicacao.ServicoAlertas.AlertaVisto v) {
             var a = v.alerta();
-            return new AlertaResumo(a.regraId(), a.regraNome(), a.tipo(), a.referenciaEm(), a.atingidoEm(),
-                    a.pendenciaId(), v.ciencia() != null);
+            return new AlertaResumo(a.regraId(), a.regraVersao(), a.regraNome(), a.tipo(), a.referenciaEm(),
+                    a.atingidoEm(), a.pendenciaId(), v.ciencia() != null);
         }
     }
 
