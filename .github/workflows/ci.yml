@@ -162,22 +162,30 @@ jobs:
           retention-days: 14
 
   homologacao:
-    name: Homologação — ambiente completo (Compose, HTTPS, backup e restauração)
+    name: Homologação — ambiente completo (Compose, HTTPS, backup, restauração e atualização)
     runs-on: ubuntu-24.04   # fixo: ubuntu-latest migra para o Ubuntu 26 em 19/10/2026; atualizar de forma deliberada
-    timeout-minutes: 45
+    timeout-minutes: 60
     # Dados FICTÍCIOS. Segredos gerados no runner efêmero (fluxo.sh preparar); backups e segredos
-    # NUNCA são publicados como artefato — só o relatório de restauração (contagens e hash da auditoria).
+    # NUNCA são publicados como artefato — só relatórios (contagens, hashes da auditoria, versões) e
+    # diagnóstico SANITIZADO.
     env:
       H: deploy/homologacao
       BASE: https://localhost:8443
       BASE_REC: https://localhost:9443
+      BASE_REC_B: https://localhost:9446
+      REL: deploy/homologacao/relatorios
     steps:
       - uses: actions/checkout@v5
       - name: Versões do Docker e do Compose
         run: docker version --format '{{.Server.Version}}' && docker compose version
-      - name: Preparar projeto (segredos aleatórios fora do Git)
-        run: bash $H/fluxo.sh preparar
-      - name: Subir (imagem, banco, migração separada, aplicação, proxy HTTPS)
+      - name: Preparar projeto e construir a imagem A (tag nova; commit no rótulo)
+        run: |
+          set -euo pipefail
+          mkdir -p "$REL"
+          bash $H/fluxo.sh preparar
+          bash $H/fluxo.sh construir
+          grep '^FLUXO_IMAGEM=' $H/ambientes/fluxo-homologacao.env
+      - name: Subir (banco, migração separada, aplicação, proxy HTTPS; compatibilidade imagem × esquema)
         run: bash $H/fluxo.sh subir
       - name: Isolamento — banco sem porta publicada; aplicação sem a credencial do dono
         run: |
@@ -205,45 +213,67 @@ jobs:
           echo "::add-mask::$(cat "$RUNNER_TEMP/senha-provisoria")"
           ( umask 077; openssl rand -hex 16 > "$RUNNER_TEMP/senha-nova" )
           echo "::add-mask::$(cat "$RUNNER_TEMP/senha-nova")"
-          python3 $H/verificar.py --base $BASE --ca "$RUNNER_TEMP/ca.crt" primeiro-acesso --login admin.homolog \
-            --senha-arquivo "$RUNNER_TEMP/senha-provisoria" --nova-senha-arquivo "$RUNNER_TEMP/senha-nova"
+          python3 $H/verificar.py --base $BASE --ca "$RUNNER_TEMP/ca.crt" --diagnostico "$REL/diagnostico-verificar.txt" \
+            primeiro-acesso --login admin.homolog --senha-arquivo "$RUNNER_TEMP/senha-provisoria" --nova-senha-arquivo "$RUNNER_TEMP/senha-nova"
           if bash $H/fluxo.sh primeiro-acesso --unidade-codigo OUTRA --unidade-nome X --admin-login outro.adm --admin-nome Y; then
             echo "FALHOU: segundo 'primeiro acesso' deveria ser recusado"; exit 1
           fi
           echo "ok: segundo 'primeiro acesso' recusado"
-      - name: HTTPS, cabeçalhos de segurança e cookies
-        run: python3 $H/verificar.py --base $BASE --ca "$RUNNER_TEMP/ca.crt" cabecalhos
-      - name: Proxy confiável — X-Forwarded-For forjado não vira IP de origem
+      - name: Página como navegador (text/html) + recursos estáticos; HTTPS, HSTS, CSP e cookies
+        run: |
+          python3 $H/verificar.py --base $BASE --ca "$RUNNER_TEMP/ca.crt" --diagnostico "$REL/diagnostico-verificar.txt" cabecalhos
+      - name: Proxy confiável — X-Forwarded-For forjado não vira IP de origem (evento correlacionado)
         run: |
           set -euo pipefail
           dc() { docker compose -f $H/compose.yaml -p fluxo-homologacao --env-file $H/ambientes/fluxo-homologacao.env "$@"; }
-          ultimo_ip() { dc exec -T db psql -U postgres -d fluxo -At -c "SELECT host(origem_ip) FROM auditoria.registro WHERE acao = 'LOGIN_FALHA' ORDER BY id DESC LIMIT 1"; }
-          python3 $H/verificar.py --base $BASE --ca "$RUNNER_TEMP/ca.crt" origem-forjada --marcador "ci$GITHUB_RUN_ID"
-          ip="$(ultimo_ip)"; echo "via proxy: IP registrado = $ip"
-          if [ "$ip" = "203.0.113.99" ] || [[ "$ip" != 172.31.240.* ]] || [ "$ip" = "172.31.240.10" ]; then
-            echo "FALHOU: IP de origem incorreto via proxy"; exit 1
-          fi
-          # Direto na aplicação (sem o proxy), de outro contêiner da rede: cabeçalho NÃO é aceito.
-          docker run --rm --network fluxo-homologacao_borda curlimages/curl:8.10.1 sh -c '
-            curl -s -c /tmp/j -o /dev/null http://app:8080/api/sessao/csrf
-            t=$(awk "/XSRF-TOKEN/{print \$7}" /tmp/j)
-            curl -s -o /dev/null -w "%{http_code}\n" -b /tmp/j -H "X-XSRF-TOKEN: $t" -H "X-Forwarded-For: 198.51.100.7" \
-              -H "Content-Type: application/json" -d "{\"login\":\"inexistente.direto\",\"senha\":\"senha-ficticia-qualquer-2\"}" \
-              http://app:8080/api/sessao'
-          ip="$(ultimo_ip)"; echo "direto: IP registrado = $ip"
-          if [ "$ip" = "198.51.100.7" ] || [[ "$ip" != 172.31.240.* ]] || [ "$ip" = "172.31.240.10" ]; then
-            echo "FALHOU: cabeçalho forjado aceito direto na aplicação"; exit 1
-          fi
+          falha() { echo "FALHOU: $*"; exit 1; }
+          # Evento LOGIN_FALHA DESTA requisição (pelo X-Correlation-Id), com o IP registrado.
+          evento() { dc exec -T db psql -U postgres -d fluxo -At -c \
+            "SELECT count(*) || '|' || coalesce(max(host(origem_ip)), '') FROM auditoria.registro
+              WHERE acao = 'LOGIN_FALHA' AND correlacao_id = '$1'"; }
+          # Passa só se houver EXATAMENTE um evento dessa requisição, com IP real (rede borda, não o proxy)
+          # e diferente do forjado ($2).
+          conferir() { local r ip; r="$(evento "$1")"; [ "${r%%|*}" = "1" ] || return 1; ip="${r#*|}"; echo "IP do evento $1: $ip"
+                       [ "$ip" != "$2" ] && [[ "$ip" == 172.31.240.* ]] && [ "$ip" != "172.31.240.10" ]; }
+          # Autoteste do critério: sem evento correspondente, a conferência REPROVA.
+          if conferir "ci-nunca-enviado-$(openssl rand -hex 6)" "203.0.113.99"; then falha "conferência aprovou sem evento"; fi
+          echo "ok: sem evento correlacionado a conferência reprova"
+          # 1) Via proxy (HTTPS).
+          cp="ci-proxy-$GITHUB_RUN_ID-$(openssl rand -hex 6)"
+          python3 $H/verificar.py --base $BASE --ca "$RUNNER_TEMP/ca.crt" --diagnostico "$REL/diagnostico-verificar.txt" \
+            origem-forjada --correlacao "$cp"
+          conferir "$cp" "203.0.113.99" || falha "via proxy: evento ausente ou IP forjado aceito"
+          echo "ok: via proxy, o IP registrado é o real"
+          # 2) Direto na aplicação (HTTP, sem o proxy), de outro contêiner da rede.
+          cd_="ci-direto-$GITHUB_RUN_ID-$(openssl rand -hex 6)"
+          cat > "$RUNNER_TEMP/direto.sh" <<'EOS'
+          curl -s -c /tmp/j -o /dev/null http://app:8080/api/sessao/csrf
+          seguro=$(awk '$6 == "XSRF-TOKEN" {print $4}' /tmp/j)
+          t=$(awk '$6 == "XSRF-TOKEN" {print $7}' /tmp/j)
+          st=$(curl -s -o /dev/null -w '%{http_code}' -b /tmp/j -H "X-XSRF-TOKEN: $t" -H "X-Forwarded-For: 198.51.100.7" \
+               -H "X-Correlation-Id: $CORR" -H "Content-Type: application/json" \
+               -d '{"login":"inexistente.direto","senha":"senha-ficticia-qualquer-2"}' http://app:8080/api/sessao)
+          echo "$seguro $st"
+          EOS
+          r="$(docker run --rm -e CORR="$cd_" -v "$RUNNER_TEMP/direto.sh:/direto.sh:ro" --network fluxo-homologacao_borda \
+                curlimages/curl:8.10.1 sh /direto.sh)"
+          echo "direto: cookie XSRF Secure=${r% *}, HTTP ${r#* }"
+          # HTTP simples: o cookie CSRF NÃO é Secure (segue request.isSecure()); por HTTPS ele é Secure
+          # (passo anterior). 401 = passou pelo CSRF e foi recusado pela CREDENCIAL (403 seria CSRF).
+          [ "${r% *}" = "FALSE" ] || falha "cookie CSRF inesperado no HTTP direto: ${r% *}"
+          [ "${r#* }" = "401" ] || falha "acesso direto não chegou à verificação de credencial (HTTP ${r#* })"
+          conferir "$cd_" "198.51.100.7" || falha "direto: evento ausente ou X-Forwarded-For forjado aceito"
+          echo "ok: direto na aplicação, o cabeçalho forjado não é aceito"
       - name: Dados fictícios (ação explícita) e episódio identificável
         run: |
           set -euo pipefail
           bash $H/fluxo.sh demo --confirmo-dados-ficticios
-          python3 $H/verificar.py --base $BASE --ca "$RUNNER_TEMP/ca.crt" criar-dados --marcador "ci$GITHUB_RUN_ID" \
-            --saida "$RUNNER_TEMP/dados.json"
+          python3 $H/verificar.py --base $BASE --ca "$RUNNER_TEMP/ca.crt" --diagnostico "$REL/diagnostico-verificar.txt" \
+            criar-dados --marcador "ci$GITHUB_RUN_ID" --saida "$RUNNER_TEMP/dados.json"
       - name: Persistência — reiniciar, parar e subir de novo
         run: |
           set -euo pipefail
-          V="python3 $H/verificar.py --base $BASE --ca $RUNNER_TEMP/ca.crt"
+          V="python3 $H/verificar.py --base $BASE --ca $RUNNER_TEMP/ca.crt --diagnostico $REL/diagnostico-verificar.txt"
           bash $H/fluxo.sh reiniciar
           $V conferir-dados --entrada "$RUNNER_TEMP/dados.json"
           $V sessao-antiga --entrada "$RUNNER_TEMP/dados.json" --espera 200
@@ -264,15 +294,17 @@ jobs:
           grep -q "BANCO INDISPONÍVEL" "$RUNNER_TEMP/diagnostico.txt"
           dc start db
           bash $H/fluxo.sh subir
-      - name: Backup (pg_dump + manifesto + SHA-256)
+      - name: Backup (pg_dump + manifesto com imagem e migrações + SHA-256)
         run: |
           set -euo pipefail
           arq="$(bash $H/fluxo.sh backup --destino "$RUNNER_TEMP/backups" | tail -1)"
           test -s "$arq"; stat -c '%a %n' "$RUNNER_TEMP/backups"/*
+          grep -E '^(imagem_id|imagem_commit|imagem_migracoes|migracoes_aplicadas)=' "${arq%.dump}.manifesto"
           echo "BACKUP=$arq" >> "$GITHUB_ENV"
-      - name: Restauração em projeto ISOLADO e aplicação recuperada conferida pela API
+      - name: Restauração em projeto ISOLADO, com a imagem do backup, conferida pela API
         run: |
           set -euo pipefail
+          R=$REL/restauracao-fluxo-recuperacao.txt
           bash $H/fluxo.sh restaurar "$BACKUP" --projeto-destino fluxo-recuperacao --porta 9443 --rede 172.31.241
           bash $H/fluxo.sh -p fluxo-recuperacao certificado "$RUNNER_TEMP/ca-rec.crt"
           python3 $H/verificar.py --base $BASE_REC --ca "$RUNNER_TEMP/ca-rec.crt" conferir-dados --entrada "$RUNNER_TEMP/dados.json"
@@ -280,51 +312,125 @@ jobs:
           python3 $H/verificar.py --base $BASE --ca "$RUNNER_TEMP/ca.crt" sessao-antiga --entrada "$RUNNER_TEMP/dados.json" --espera 200
           python3 $H/verificar.py --base $BASE_REC --ca "$RUNNER_TEMP/ca-rec.crt" sessao-antiga --entrada "$RUNNER_TEMP/dados.json" --espera 401
           python3 $H/verificar.py --base $BASE --ca "$RUNNER_TEMP/ca.crt" conferir-dados --entrada "$RUNNER_TEMP/dados.json"
-          cat $H/relatorios/restauracao-fluxo-recuperacao.txt
-          grep -qx 'conferencia_manifesto=OK' $H/relatorios/restauracao-fluxo-recuperacao.txt
-          grep -qx 'auditoria_cadeia_problemas=0' $H/relatorios/restauracao-fluxo-recuperacao.txt
-          grep -qx 'sessoes_invalidadas=0' $H/relatorios/restauracao-fluxo-recuperacao.txt   # nenhuma sessão veio no backup
+          cat "$R"
+          for l in conferencia_manifesto=OK auditoria_cadeia_problemas=0 sessoes_invalidadas=0 estado_final=OK; do grep -qx "$l" "$R"; done
+          [ "$(sed -n 's/^imagem_recuperacao=//p' "$R")" = "$(sed -n 's/^imagem_backup=//p' "$R")" ]
+          [ "$(sed -n 's/^imagem_em_execucao=//p' "$R")" = "$(sed -n 's/^imagem_backup=//p' "$R")" ]
+          grep -qx 'FLUXO_FLYWAY_ALVO=current' $H/ambientes/fluxo-recuperacao.env
           if bash $H/fluxo.sh restaurar "$BACKUP" --projeto-destino fluxo-recuperacao --porta 9444 --rede 172.31.244; then
             echo "FALHOU: restauração sobrescreveu projeto existente"; exit 1
           fi
           echo "ok: restauração não sobrescreve projeto existente"
-      - name: Atualização com backup prévio e migração separada
+      - name: Atualização com backup prévio e migração separada (sucesso)
         run: |
           set -euo pipefail
-          antes=$(ls "$H/backups" 2>/dev/null | grep -c '\.dump$' || true)
           bash $H/fluxo.sh atualizar
-          depois=$(ls "$H/backups" | grep -c '\.dump$')
-          [ "$depois" -gt "$antes" ] || { echo "FALHOU: sem backup prévio"; exit 1; }
-          echo "ok: backup feito antes da atualização"
+          grep -h '^resultado=' $REL/atualizacao-fluxo-homologacao-*.txt | tail -1 | grep -qx 'resultado=SUCESSO'
           python3 $H/verificar.py --base $BASE --ca "$RUNNER_TEMP/ca.crt" conferir-dados --entrada "$RUNNER_TEMP/dados.json"
-      - name: Migração com falha impede a aplicação (projeto isolado)
+      - name: Imagens de TESTE com migrações artificiais (exclusivas do teste)
+        run: |
+          set -euo pipefail
+          A="$(sed -n 's/^FLUXO_IMAGEM=//p' $H/ambientes/fluxo-homologacao.env)"
+          echo "IMAGEM_A=$A" >> "$GITHUB_ENV"
+          docker build -q -t fluxo-saude:teste-sem-avanco --build-arg BASE="$A" --build-arg CONJUNTO=sem-avanco $H/teste-atualizacao
+          docker build -q -t fluxo-saude:teste-parcial --build-arg BASE="$A" --build-arg CONJUNTO=parcial $H/teste-atualizacao
+          for t in teste-sem-avanco teste-parcial; do docker run --rm --entrypoint cat fluxo-saude:$t /app/migracoes.txt | tail -2; done
+      - name: Atualização malsucedida SEM avanço do esquema — aplicação anterior restabelecida
+        run: |
+          set -euo pipefail
+          dc() { docker compose -f $H/compose.yaml -p fluxo-homologacao --env-file $H/ambientes/fluxo-homologacao.env "$@"; }
+          antes="$(dc exec -T db psql -U postgres -d fluxo -At -c "SELECT string_agg(version, ',' ORDER BY version::numeric) FROM fluxo.flyway_schema_history WHERE success AND version IS NOT NULL")"
+          set +e; bash $H/fluxo.sh atualizar --imagem fluxo-saude:teste-sem-avanco; rc=$?; set -e
+          [ "$rc" -ne 0 ] || { echo "FALHOU: a atualização deveria falhar"; exit 1; }
+          rel="$(ls -t $REL/atualizacao-fluxo-homologacao-*.txt | head -1)"; cat "$rel"
+          grep -qx 'resultado=FALHA_SEM_AVANCO' "$rel"; grep -qx 'aplicacao=REVERTIDA_PARA_ANTERIOR' "$rel"
+          depois="$(dc exec -T db psql -U postgres -d fluxo -At -c "SELECT string_agg(version, ',' ORDER BY version::numeric) FROM fluxo.flyway_schema_history WHERE success AND version IS NOT NULL")"
+          [ "$antes" = "$depois" ] || { echo "FALHOU: esquema mudou"; exit 1; }
+          [ "$(docker inspect -f '{{.Image}}' "$(dc ps -q app)")" = "$(docker image inspect -f '{{.Id}}' "$IMAGEM_A")" ]
+          python3 $H/verificar.py --base $BASE --ca "$RUNNER_TEMP/ca.crt" conferir-dados --entrada "$RUNNER_TEMP/dados.json"
+          echo "ok: falha sem avanço; a aplicação anterior (compatível) voltou a atender"
+      - name: Atualização malsucedida com AVANÇO PARCIAL (V9001 confirma, V9002 falha) — aplicação fica parada
+        run: |
+          set -euo pipefail
+          dc() { docker compose -f $H/compose.yaml -p fluxo-homologacao --env-file $H/ambientes/fluxo-homologacao.env "$@"; }
+          set +e; bash $H/fluxo.sh atualizar --imagem fluxo-saude:teste-parcial; rc=$?; set -e
+          [ "$rc" = "3" ] || { echo "FALHOU: esperado código 3 (avanço parcial), obtido $rc"; exit 1; }
+          rel="$(ls -t $REL/atualizacao-fluxo-homologacao-*.txt | head -1)"; cat "$rel"
+          grep -qx 'resultado=FALHA_COM_AVANCO_PARCIAL' "$rel"; grep -qx 'aplicacao=PARADA' "$rel"
+          q() { dc exec -T db psql -U postgres -d fluxo -At -c "$1"; }
+          [ "$(q "SELECT count(*) FROM fluxo.flyway_schema_history WHERE version = '9001' AND success")" = "1" ]
+          [ "$(q "SELECT count(*) FROM fluxo.flyway_schema_history WHERE version = '9002'")" = "0" ]
+          [ "$(q "SELECT to_regclass('fluxo.teste_atualizacao_9001') IS NOT NULL")" = "t" ]
+          [ "$(q "SELECT to_regclass('fluxo.teste_atualizacao_9002') IS NULL")" = "t" ]
+          echo "ok: V9001 confirmada, V9002 desfeita (avanço parcial real)"
+          [ -z "$(dc ps -q --status running app)" ] && [ -z "$(dc ps -q --status running proxy)" ] \
+            || { echo "FALHOU: aplicação/proxy atendendo com esquema parcial"; exit 1; }
+          if curl -sk --max-time 5 -o /dev/null $BASE/actuator/health; then echo "FALHOU: algo ainda responde em $BASE"; exit 1; fi
+          echo "ok: nenhuma aplicação atende o esquema parcialmente migrado"
+          # A imagem anterior também é recusada para este esquema (compatibilidade), e nada volta a atender.
+          if bash $H/fluxo.sh subir; then echo "FALHOU: subir aceitou imagem incompatível"; exit 1; fi
+          [ -z "$(dc ps -q --status running app)" ] || { echo "FALHOU: aplicação incompatível em execução"; exit 1; }
+          echo "ok: imagem anterior recusada para o esquema parcial"
+          bkp="$(sed -n 's/^backup_previo=//p' "$rel")"
+          echo "BACKUP_PRE_B=$H/backups/$bkp" >> "$GITHUB_ENV"
+      - name: Restauração ISOLADA com a imagem A após a falha de B, conferida pela API
+        run: |
+          set -euo pipefail
+          # Imagem incompatível é recusada ANTES de criar qualquer coisa.
+          if bash $H/fluxo.sh restaurar "$BACKUP_PRE_B" --projeto-destino fluxo-recuperacao-b --porta 9446 --rede 172.31.245 \
+               --imagem fluxo-saude:teste-parcial; then echo "FALHOU: aceitou imagem incompatível"; exit 1; fi
+          if [ -e $H/ambientes/fluxo-recuperacao-b.env ] || docker volume inspect fluxo-recuperacao-b_dados >/dev/null 2>&1; then
+            echo "FALHOU: projeto criado apesar da imagem incompatível"; exit 1
+          fi
+          echo "ok: imagem incompatível recusada sem criar projeto"
+          bash $H/fluxo.sh restaurar "$BACKUP_PRE_B" --projeto-destino fluxo-recuperacao-b --porta 9446 --rede 172.31.245
+          R=$REL/restauracao-fluxo-recuperacao-b.txt; cat "$R"
+          for l in conferencia_manifesto=OK auditoria_cadeia_problemas=0 estado_final=OK; do grep -qx "$l" "$R"; done
+          if grep -q '^migracoes_aplicadas=.*9001' "$R"; then echo "FALHOU: esquema recuperado contém a V9001"; exit 1; fi
+          [ "$(sed -n 's/^imagem_em_execucao=//p' "$R")" = "$(docker image inspect -f '{{.Id}}' "$IMAGEM_A")" ]
+          bash $H/fluxo.sh -p fluxo-recuperacao-b certificado "$RUNNER_TEMP/ca-rec-b.crt"
+          python3 $H/verificar.py --base $BASE_REC_B --ca "$RUNNER_TEMP/ca-rec-b.crt" conferir-dados --entrada "$RUNNER_TEMP/dados.json"
+          python3 $H/verificar.py --base $BASE_REC_B --ca "$RUNNER_TEMP/ca-rec-b.crt" sessao-antiga --entrada "$RUNNER_TEMP/dados.json" --espera 401
+          # O original permanece como estava (volume e esquema parcial preservados, nada atendendo).
+          dc() { docker compose -f $H/compose.yaml -p fluxo-homologacao --env-file $H/ambientes/fluxo-homologacao.env "$@"; }
+          docker volume inspect fluxo-homologacao_dados >/dev/null
+          [ "$(dc exec -T db psql -U postgres -d fluxo -At -c "SELECT count(*) FROM fluxo.flyway_schema_history WHERE version = '9001'")" = "1" ]
+          echo "ok: dados recuperados com a imagem A; sessão do original recusada; original intacto"
+      - name: Migração com falha de credencial impede a aplicação (projeto isolado)
         run: |
           set -euo pipefail
           bash $H/fluxo.sh -p fluxo-falha preparar --porta 8445 --rede 172.31.243
+          sed -i "s|^FLUXO_IMAGEM=.*|FLUXO_IMAGEM=$IMAGEM_A|" $H/ambientes/fluxo-falha.env
           bash $H/fluxo.sh -p fluxo-falha subir
           bash $H/fluxo.sh -p fluxo-falha parar
           openssl rand -hex 32 > "$H/segredos/fluxo-falha/db_dono"     # senha errada do dono
-          if bash $H/fluxo.sh -p fluxo-falha subir; then echo "a subida deveria falhar"; exit 1; fi
+          if bash $H/fluxo.sh -p fluxo-falha subir > "$RUNNER_TEMP/falha.txt" 2>&1; then cat "$RUNNER_TEMP/falha.txt"; echo "a subida deveria falhar"; exit 1; fi
+          tail -5 "$RUNNER_TEMP/falha.txt"
+          grep -q "migração com falha" "$RUNNER_TEMP/falha.txt"
           dcf() { docker compose -f $H/compose.yaml -p fluxo-falha --env-file $H/ambientes/fluxo-falha.env "$@"; }
-          [ "$(docker inspect -f '{{.State.ExitCode}}' "$(dcf ps -aq migracao)")" != "0" ]
           [ -z "$(dcf ps -q --status running app)" ] || { echo "FALHOU: aplicação iniciada apesar da migração"; exit 1; }
           echo "ok: migração falhou e a aplicação não foi iniciada"
-      - name: Nenhum segredo nos logs dos contêineres
+      - name: Nenhum segredo nos logs; logs sanitizados para diagnóstico
         if: always()
         run: |
           set -uo pipefail
-          for p in fluxo-homologacao fluxo-recuperacao fluxo-falha; do
+          mkdir -p "$REL"
+          for p in fluxo-homologacao fluxo-recuperacao fluxo-recuperacao-b fluxo-falha; do
             [ -f $H/ambientes/$p.env ] || continue
             docker compose -f $H/compose.yaml -p $p --env-file $H/ambientes/$p.env logs --no-color > "$RUNNER_TEMP/logs-$p.txt" 2>&1 || true
             for s in $H/segredos/$p/*; do
               if grep -qF "$(cat "$s")" "$RUNNER_TEMP/logs-$p.txt"; then echo "SEGREDO EM LOG: $p/$(basename "$s")"; exit 1; fi
             done
-          done
-          for s in "$RUNNER_TEMP/senha-provisoria" "$RUNNER_TEMP/senha-nova"; do
-            [ -f "$s" ] && grep -qF "$(cat "$s")" "$RUNNER_TEMP"/logs-*.txt && { echo "SENHA EM LOG"; exit 1; }
+            for s in "$RUNNER_TEMP/senha-provisoria" "$RUNNER_TEMP/senha-nova"; do
+              [ -f "$s" ] && grep -qF "$(cat "$s")" "$RUNNER_TEMP/logs-$p.txt" && { echo "SENHA EM LOG"; exit 1; }
+            done
+            # Só depois da conferência: cópia das últimas linhas, com cookies/tokens/hex longos removidos.
+            tail -400 "$RUNNER_TEMP/logs-$p.txt" \
+              | sed -E 's/(__Host-[A-Za-z]+|XSRF-TOKEN|JSESSIONID|SESSION)=[^;[:space:]]+/\1=[removido]/g; s/[A-Za-z0-9+\/_=-]{32,}/[longo-removido]/g' \
+              > "$REL/logs-$p.txt"
           done
           echo "ok: nenhum segredo nos logs"
-      - name: Guardar evidências (sem backups nem segredos)
+      - name: Guardar evidências (relatórios e diagnóstico sanitizado; sem backups nem segredos)
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -336,7 +442,7 @@ jobs:
       - name: Limpeza
         if: always()
         run: |
-          for p in fluxo-falha fluxo-recuperacao fluxo-homologacao; do
+          for p in fluxo-falha fluxo-recuperacao-b fluxo-recuperacao fluxo-homologacao; do
             [ -f $H/ambientes/$p.env ] && bash $H/fluxo.sh -p $p remover --confirmo-apagar-dados || true
           done
           rm -rf "$RUNNER_TEMP/backups" "$RUNNER_TEMP"/senha-* "$H/backups"
