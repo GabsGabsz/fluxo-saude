@@ -152,6 +152,40 @@ Restrições:
      Assim, a requisição direta passa pelo CSRF e chega à verificação de credencial, sem afrouxar a
      configuração.
 
+11. **Segunda revisão do PR #12** (head `a1e4bee`; job Homologação falhou no cookie CSRF).
+
+   **11.1 Cookie CSRF.** O teste usava o mesmo cliente das requisições anteriores e exigia um
+   `Set-Cookie` novo. O `CookieCsrfTokenRepository` só emite o cookie quando **cria** o token; com o
+   cookie já no jar, ele é reutilizado sem reemissão. A premissa do teste estava errada; a aplicação
+   não foi alterada. A verificação agora tem três fases:
+   - **emissão:** cliente novo (jar vazio) recebe `XSRF-TOKEN` com `Secure`, `Path=/` e sem `Domain`;
+   - **armazenamento:** o cookie guardado no jar é `secure`, host-only e com `Path=/`;
+   - **reutilização:** com o mesmo jar, reemissão não é exigida (se houver, também precisa ser segura) e
+     o token guardado continua **válido**: um POST com ele é recusado por credencial (401), não por
+     CSRF (403).
+
+   Os atributos são conferidos como **tokens** do `Set-Cookie`, não por substring (o critério antigo
+   aceitaria `secure` dentro do valor). `verificar.py autoteste` prova que o validador rejeita cookie
+   sem `Secure` e variantes; no CI, o mesmo validador rejeita o cookie **real** emitido por HTTP direto
+   (valor removido dentro do contêiner). Nenhum valor de cookie é impresso.
+
+   **11.2 Correção para a frente.** `atualizar` normal exige banco = imagem atual e por isso recusava
+   a imagem corrigida depois de um avanço parcial — o caminho documentado não funcionava. Agora:
+   - a falha com avanço parcial registra uma **marca** com as migrações antes/depois, as imagens e o
+     backup prévio, e um **inventário** (arquivo + SHA-256) das migrações aplicadas, tirado das imagens
+     que as aplicaram;
+   - com a marca, `subir`, `reiniciar` e `atualizar` normal são recusados (a restauração cria projeto
+     separado e não herda a marca);
+   - `atualizar --imagem C --continuar-parcial` mantém tudo parado, confere o inventário contra C
+     (recusa antes de migrar se divergir), faz backup separado do estado parcial, aplica só as
+     pendentes e só volta a atender quando o `subir` confirma esquema = C, imagem em execução e saúde;
+   - falha sem novo avanço → continua parado (código 4); novo avanço parcial → marca atualizada
+     (código 3).
+
+   Alternativas descartadas: relaxar a igualdade da atualização normal (perderia a proteção);
+   `flyway repair` ou edição do histórico (apagaria a evidência e mascararia divergências); reativar a
+   imagem anterior após falha da correção (incompatível com o esquema parcial).
+
 ## Consequências
 
 - Linux e Windows usam o mesmo script; no Windows, ele roda **dentro do WSL2** (Docker Desktop). Não há script PowerShell paralelo para manter.

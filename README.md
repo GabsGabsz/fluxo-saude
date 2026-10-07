@@ -68,6 +68,7 @@ bash $H/fluxo.sh primeiro-acesso --unidade-codigo UPA_TESTE --unidade-nome "UPA 
 bash $H/fluxo.sh backup                   # .dump + .manifesto + .sha256 (sem sessões)
 bash $H/fluxo.sh restaurar ARQ.dump       # projeto SEPARADO, imagem do backup; confere auditoria, contagens e estado final
 bash $H/fluxo.sh atualizar                # backup + manutenção + migração separada; trata avanço parcial
+bash $H/fluxo.sh atualizar --imagem REF --continuar-parcial   # correção para a frente de um avanço parcial
 bash $H/fluxo.sh diagnostico
 ```
 

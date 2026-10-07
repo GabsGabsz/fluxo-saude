@@ -192,8 +192,13 @@ Gera três arquivos:
   - migrações aplicadas e versão do esquema;
   - contagens por tabela;
   - hash da cabeça da cadeia de auditoria e problemas da cadeia;
-  - **identidade imutável da imagem** que atendia o banco: ID do conteúdo `sha256:…` (não só a tag), commit do rótulo e migrações que ela embute.
+  - **identidade imutável da imagem** que atendia o banco: ID do conteúdo `sha256:…` (não só a tag), commit do rótulo e migrações que ela embute;
+  - `estado=NORMAL`, ou `estado=PARCIAL` quando há uma atualização com avanço parcial pendente (§7.2).
 - `.sha256`: somas de verificação.
+
+`--rotulo NOME` acrescenta um sufixo ao nome (ex.: `-parcial`, usado pela correção para a frente). Um
+backup do estado parcial serve para análise e para repetir a correção; ele **não** é restaurável
+pelo procedimento abaixo, porque nenhuma imagem embute exatamente aquele conjunto de migrações.
 
 **Os dados das sessões HTTP (`sessao.*`) são excluídos**: um identificador de sessão é uma credencial.
 
@@ -265,11 +270,18 @@ bash $H/fluxo.sh atualizar        # ou: atualizar --imagem REF (imagem já const
 5. Executa a **migração separada** com a nova imagem e registra as migrações aplicadas **depois**.
 6. Decide pelo resultado. Há um relatório em `relatorios/atualizacao-<projeto>-<UTC>.txt` (código 0, 1 ou 3).
 
+`atualizar` sem `--continuar-parcial` só parte de um estado **coerente** (migrações do banco = as da
+imagem atual). Com uma atualização parcial pendente ela é recusada, sem alterar nada, e a mensagem traz
+o comando da §7.2.
+
 | Resultado | Situação | O que o script faz | Código |
 |---|---|---|---|
 | `SUCESSO` | migração ok e esquema = migrações da imagem nova | ativa a nova imagem e sobe | 0 |
 | `FALHA_SEM_AVANCO` | migração falhou e as migrações aplicadas são **as mesmas de antes** | a compatibilidade da imagem anterior está **comprovada** (mesmo conjunto): restabelece a aplicação anterior e retorna erro | 1 |
-| `FALHA_COM_AVANCO_PARCIAL` | migração falhou **depois** de confirmar parte das migrações novas | **deixa aplicação e proxy parados**; nenhuma imagem disponível é comprovadamente compatível | 3 |
+| `FALHA_COM_AVANCO_PARCIAL` | migração falhou **depois** de confirmar parte das migrações novas | **deixa aplicação e proxy parados** (nenhuma imagem disponível é comprovadamente compatível) e registra a **marca de avanço parcial** (`ambientes/<projeto>.parcial` + `.parcial.inventario`) | 3 |
+
+Enquanto a marca existir, `subir`, `reiniciar` e `atualizar` (normal) são **recusados**: nada volta a
+atender sozinho sobre o esquema parcial. A marca só é removida pela correção para a frente bem-sucedida.
 
 ### Por que pode haver avanço parcial
 
@@ -278,20 +290,57 @@ O Flyway executa **cada migração** numa transação. O PostgreSQL desfaz a mig
 pode ficar aplicada e a segunda falhar. Por isso **não há rollback integral automático**: o CI
 demonstra esse caso com migrações artificiais exclusivas do teste (`teste-atualizacao/`).
 
-### Recuperação após falha com avanço parcial
+### 7.1 Recuperação após falha com avanço parcial
 
 **Não** volte simplesmente para a imagem anterior. O Flyway a aceitaria, porque ignora migrações
-"futuras" por padrão, mas ela não conhece o esquema novo. O `subir` a recusa pela verificação de
-compatibilidade. Escolha uma das opções:
+"futuras" por padrão, mas ela não conhece o esquema novo. O `subir` a recusa (marca de avanço parcial e
+verificação de compatibilidade). Há dois caminhos:
 
-- **Correção para a frente** (preferível quando o defeito está na migração ou no código novo): nova
-  imagem com as migrações corrigidas e `atualizar --imagem <corrigida>`. As migrações já aplicadas
-  não podem ser alteradas (o Flyway confere as somas); corrija com migrações novas.
+- **Correção para a frente** (§7.2): preferível quando o defeito está na migração que falhou ou no
+  código novo. Mantém os registros feitos até a parada.
 - **Restauração isolada** do backup feito no passo 1, com a imagem registrada nele:
-  `fluxo.sh restaurar <backup>`. Ela cria um projeto separado, valida o esquema sem migrar e confere
-  os dados. Depois de conferir, promova o projeto recuperado (§6).
-  - O original, com o esquema parcial, fica preservado para análise.
+  `fluxo.sh restaurar <backup>`. Ela cria um projeto separado, valida o esquema sem migrar e confere os
+  dados. Depois de conferir, promova o projeto recuperado (§6).
+  - O original, com o esquema parcial e a marca, fica preservado e parado para análise (e ainda pode
+    ser corrigido para a frente).
   - Registros feitos **depois** do backup não estão nele (ver RPO, §6).
+
+### 7.2 Correção para a frente (comando que funciona sobre o estado parcial)
+
+Construa uma imagem corretiva **C**: as migrações **já aplicadas** ficam **idênticas** (mesmo arquivo,
+mesmo conteúdo), e as que ainda não foram aplicadas são corrigidas. Uma migração que falhou e foi
+desfeita pode ser corrigida com o mesmo número, porque não ficou registrada. Uma migração já aplicada
+nunca é editada: se ela estiver errada, a correção é uma migração **nova**.
+
+```bash
+bash $H/fluxo.sh construir --tag fluxo-saude:<versao-corrigida> --sem-ativar   # a partir do commit corrigido
+bash $H/fluxo.sh atualizar --imagem fluxo-saude:<versao-corrigida> --continuar-parcial
+```
+
+O que o comando faz, nesta ordem:
+
+1. Exige a marca de avanço parcial (sem ela, recusa e indica `atualizar` normal) e mantém **aplicação
+   e proxy parados**.
+2. Confere que o esquema não mudou desde a falha registrada (senão, análise manual; nada é alterado).
+3. **Confere histórico e somas:** cada migração já aplicada (nome do arquivo e SHA-256 de quem a
+   aplicou, guardados no inventário da marca) precisa existir **idêntica** em C. Divergência: recusa
+   **antes de migrar** (`RECUSADA_HISTORICO_DIVERGENTE`). O Flyway confere de novo os checksums dele ao
+   migrar.
+4. Faz um **backup do estado parcial**, separado (`…-parcial.dump`, `estado=PARCIAL`). O backup
+   anterior à atualização defeituosa é **preservado** (seu caminho está na marca e no relatório).
+5. Executa a migração separada com C, que aplica **só as pendentes**.
+6. Decide pelo resultado:
+
+| Resultado | Situação | O que o script faz | Código |
+|---|---|---|---|
+| `SUCESSO` | migração ok e esquema = migrações de C | ativa C, remove a marca (arquivada em `relatorios/parcial-resolvido-*`) e sobe; o `subir` confere esquema × imagem, **imagem em execução** e **saúde** antes de considerar concluído | 0 |
+| `RECUSADA_HISTORICO_DIVERGENTE` | C não contém, idênticas, as migrações já aplicadas | nada é alterado; continua parado | 1 |
+| `FALHA_SEM_NOVO_AVANCO` | a correção falhou e o esquema continua o mesmo | **continua parado**; nenhuma imagem é reativada (a anterior não conhece o esquema parcial); a marca permanece | 4 |
+| `FALHA_COM_NOVO_AVANCO_PARCIAL` | a correção aplicou parte das pendentes e falhou | continua parado; a marca e o inventário passam a incluir as novas migrações aplicadas por C | 3 |
+
+O relatório `relatorios/atualizacao-<projeto>-<UTC>.txt` traz `modo=CONTINUACAO_PARCIAL`, o backup
+anterior à atualização, o backup do estado parcial, as migrações antes e depois, a imagem em execução e
+o resultado. O CI executa exatamente este comando no cenário A → B parcial → correção que falha → C.
 
 ### Falha sem avanço e outros casos
 
