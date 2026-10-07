@@ -30,8 +30,10 @@ jobs:
           --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v5
-      - name: Instalar cliente psql
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
+      - name: Cliente psql (já incluso na imagem do runner; apt só se faltar, com prazo)
+        run: |
+          if command -v psql >/dev/null; then psql --version
+          else timeout 600 bash -c 'sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client'; fi
       - name: Executar testes do banco
         env:
           PGHOST: localhost
@@ -125,7 +127,8 @@ jobs:
           python-version: "3.12"
       - name: Ferramentas (psql, argon2-cffi)
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
+          if command -v psql >/dev/null; then psql --version
+          else timeout 600 bash -c 'sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client'; fi
           pip install --quiet argon2-cffi==25.1.0
       - name: Construir o jar
         working-directory: backend
