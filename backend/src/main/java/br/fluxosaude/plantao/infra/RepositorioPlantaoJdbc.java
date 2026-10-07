@@ -334,9 +334,10 @@ final class RepositorioPlantaoJdbc implements RepositorioPlantao {
             List<RegraVersaoId> pedidas = List.copyOf(ref.regras());
             jdbc.sql("""
                     SELECT v.regra_id, v.versao, v.nome, v.tipo::text, (extract(epoch FROM v.limite) / 60)::bigint,
-                           v.acao_esperada, v.ativa
+                           v.acao_esperada, v.ativa, et.nome, v.categoria::text
                       FROM unnest(CAST(? AS uuid[]), CAST(? AS int[])) AS q(regra_id, versao)
                       JOIN fluxo.regra_alerta_versao v ON v.regra_id = q.regra_id AND v.versao = q.versao
+                      LEFT JOIN fluxo.etapa et ON et.id = v.etapa_id
                     """)
                 .param(array(pedidas.stream().map(RegraVersaoId::regraId).toList()))
                 .param(pedidas.stream().map(x -> Integer.toString(x.versao())).collect(Collectors.joining(",", "{", "}")))
@@ -344,7 +345,7 @@ final class RepositorioPlantaoJdbc implements RepositorioPlantao {
                     long lim = rs.getLong(5);
                     Long limite = rs.wasNull() ? null : lim;
                     RegraNaVersao v = new RegraNaVersao(uuid(rs, 1), rs.getInt(2), rs.getString(3), rs.getString(4), limite,
-                            rs.getString(6), rs.getBoolean(7));
+                            rs.getString(6), rs.getBoolean(7), rs.getString(8), rs.getString(9));
                     versoes.put(new RegraVersaoId(v.regraId(), v.versao()), v);
                     return null;
                 })

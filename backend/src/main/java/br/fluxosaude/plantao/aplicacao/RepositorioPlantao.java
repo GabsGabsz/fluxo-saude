@@ -55,7 +55,7 @@ public interface RepositorioPlantao {
      * do mapa = versão anterior ao histórico (detalhes indisponíveis).
      */
     record RegraNaVersao(UUID regraId, int versao, String nome, String tipo, Long limiteMinutos, String acaoEsperada,
-                         boolean ativa) {
+                         boolean ativa, String etapaNome, String categoria) {
     }
 
     /** Situação ATUAL da regra (para dizer, junto do alerta histórico, se ela mudou ou foi desativada). */

@@ -101,6 +101,8 @@ export function montar(raiz, ctx, { id }) {
     const r = a.regra;
     const partes = [h('strong', {}, r ? r.nome : `Regra (${rotulos.tipoRegra(a.tipo)})`),
       ` — versão ${a.regraVersao}; ${rotulos.tipoRegra(a.tipo)}`,
+      r && r.etapaNome ? `; etapa: ${r.etapaNome}` : '',
+      r && r.categoria ? `; categoria: ${rotulos.categoria(r.categoria)}` : '',
       r ? `; limite: ${limite(r.limiteMinutos)}` : '',
       r ? (r.acaoEsperada ? ` — ação esperada: ${r.acaoEsperada}` : ' — sem ação esperada cadastrada')
         : ' — detalhes desta versão da regra indisponíveis (anterior ao histórico de versões)',

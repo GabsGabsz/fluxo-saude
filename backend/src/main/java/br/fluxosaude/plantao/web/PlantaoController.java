@@ -48,7 +48,9 @@ class PlantaoController {
                      UUID pendenciaId, String pendenciaDescricao, RegraVersaoDto regra, RegraAtualDto regraAtual) {
     }
 
-    record RegraVersaoDto(String nome, Long limiteMinutos, String acaoEsperada, boolean ativa) {
+    /** {@code etapaNome}/{@code categoria}: filtro da regra nessa versão (etapa monitorada; categoria do bloqueio). */
+    record RegraVersaoDto(String nome, Long limiteMinutos, String acaoEsperada, boolean ativa, String etapaNome,
+                          String categoria) {
     }
 
     record RegraAtualDto(int versao, boolean ativa) {
@@ -249,7 +251,7 @@ class PlantaoController {
         RepositorioPlantao.RegraAtual atual = nomes.regrasAtuais().get(a.regraId());
         return new AlertaDto(a.regraId(), a.regraVersao(), a.tipo().name(), a.referenciaEm(), a.atingidoEm(), a.pendenciaId(),
                 a.pendenciaId() == null ? null : nomes.pendencias().get(a.pendenciaId()),
-                v == null ? null : new RegraVersaoDto(v.nome(), v.limiteMinutos(), v.acaoEsperada(), v.ativa()),
+                v == null ? null : new RegraVersaoDto(v.nome(), v.limiteMinutos(), v.acaoEsperada(), v.ativa(), v.etapaNome(), v.categoria()),
                 atual == null ? null : new RegraAtualDto(atual.versao(), atual.ativa()));
     }
 
