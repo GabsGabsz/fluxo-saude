@@ -64,3 +64,9 @@ export function responsavel(p) {
 export const statusPassagem = mapa({ ENTREGUE: 'Aguardando recebimento', RECEBIDA: 'Recebida', CANCELADA: 'Cancelada' });
 
 export const dimensaoRetrato = mapa({ ETAPA: 'Etapa', MOTIVO: 'Motivo do bloqueio' });
+
+// O que mudou desde a entrega da passagem (PlantaoController.CasoDiferencaDto/PendenciaDiferencaDto).
+export const campoCaso = mapa({ ETAPA: 'Etapa', SETOR: 'Setor', MOTIVO_BLOQUEIO: 'Bloqueio/motivo', CRITICO: 'Crítico',
+  TRANSFERENCIA: 'Transferência', ALERTAS: 'Alertas operacionais', ENTRADA: 'Entrada', OUTRO_REGISTRO: 'Outro registro no caso' });
+export const campoPendencia = mapa({ RESPONSAVEL: 'Responsável', PRAZO: 'Prazo', VENCIMENTO: 'Vencimento',
+  CRITICIDADE: 'Criticidade operacional', CATEGORIA: 'Categoria', OUTRO_REGISTRO: 'Outro registro na pendência' });

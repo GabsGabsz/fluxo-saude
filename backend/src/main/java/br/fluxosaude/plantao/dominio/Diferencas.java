@@ -1,20 +1,19 @@
 package br.fluxosaude.plantao.dominio;
 
-import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
-import java.util.function.Function;
 import java.util.stream.Collectors;
 
 /**
  * O que mudou entre o conteúdo ENTREGUE e o estado atual, mostrado a quem recebe: episódios
- * encerrados ou novos, casos alterados (versão, marcações ou alertas), pendências encerradas,
- * novas ou alteradas (versão ou vencimento). A confirmação do recebimento assina o conteúdo
- * entregue E estas diferenças: se mudarem antes do clique, o recebimento é recusado.
+ * encerrados ou novos, casos alterados (qualquer campo do conteúdo), pendências encerradas, novas
+ * ou alteradas (qualquer campo). Os valores de antes/depois estão em {@link Comparacao}. A
+ * confirmação do recebimento assina o conteúdo entregue, estas diferenças e o conteúdo atual: se
+ * algo mudar antes do clique, o recebimento é recusado.
  */
 public record Diferencas(List<UUID> casosEncerrados, List<UUID> casosNovos, List<UUID> casosAlterados,
                          List<UUID> pendenciasEncerradas, List<UUID> pendenciasNovas, List<UUID> pendenciasAlteradas) {
@@ -28,39 +27,9 @@ public record Diferencas(List<UUID> casosEncerrados, List<UUID> casosNovos, List
         pendenciasAlteradas = ordenada(pendenciasAlteradas);
     }
 
+    /** Ids das diferenças; o detalhe (antes/depois, campos) está em {@link Comparacao#entre}. */
     public static Diferencas entre(ConteudoPassagem entregue, ConteudoPassagem atual) {
-        Map<UUID, ConteudoPassagem.CasoPassagem> antes = porId(entregue.casos(), ConteudoPassagem.CasoPassagem::episodioId);
-        Map<UUID, ConteudoPassagem.CasoPassagem> agora = porId(atual.casos(), ConteudoPassagem.CasoPassagem::episodioId);
-        Map<UUID, ConteudoPassagem.PendenciaPassagem> pAntes = porId(
-                entregue.casos().stream().flatMap(c -> c.pendencias().stream()).toList(),
-                ConteudoPassagem.PendenciaPassagem::id);
-        Map<UUID, ConteudoPassagem.PendenciaPassagem> pAgora = porId(
-                atual.casos().stream().flatMap(c -> c.pendencias().stream()).toList(),
-                ConteudoPassagem.PendenciaPassagem::id);
-        List<UUID> encerrados = new ArrayList<>();
-        List<UUID> alterados = new ArrayList<>();
-        antes.forEach((id, c) -> {
-            ConteudoPassagem.CasoPassagem n = agora.get(id);
-            if (n == null) {
-                encerrados.add(id);
-            } else if (n.versao() != c.versao() || n.critico() != c.critico() || n.transferencia() != c.transferencia()
-                    || !n.alertas().equals(c.alertas())) {
-                alterados.add(id);
-            }
-        });
-        List<UUID> novos = agora.keySet().stream().filter(id -> !antes.containsKey(id)).toList();
-        List<UUID> pEncerradas = new ArrayList<>();
-        List<UUID> pAlteradas = new ArrayList<>();
-        pAntes.forEach((id, p) -> {
-            ConteudoPassagem.PendenciaPassagem n = pAgora.get(id);
-            if (n == null) {
-                pEncerradas.add(id);
-            } else if (n.versao() != p.versao() || n.vencida() != p.vencida()) {
-                pAlteradas.add(id);
-            }
-        });
-        List<UUID> pNovas = pAgora.keySet().stream().filter(id -> !pAntes.containsKey(id)).toList();
-        return new Diferencas(encerrados, novos, alterados, pEncerradas, pNovas, pAlteradas);
+        return Comparacao.entre(entregue, atual).diferencas();
     }
 
     public boolean vazia() {
@@ -103,11 +72,5 @@ public record Diferencas(List<UUID> casosEncerrados, List<UUID> casosNovos, List
 
     private static List<UUID> ordenada(List<UUID> ids) {
         return ids.stream().sorted(Comparator.comparing(UUID::toString)).toList();
-    }
-
-    private static <T> Map<UUID, T> porId(List<T> itens, Function<T, UUID> id) {
-        Map<UUID, T> m = new LinkedHashMap<>();
-        itens.forEach(i -> m.put(id.apply(i), i));
-        return m;
     }
 }

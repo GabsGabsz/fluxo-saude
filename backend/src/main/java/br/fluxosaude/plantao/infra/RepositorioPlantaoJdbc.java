@@ -301,32 +301,57 @@ final class RepositorioPlantaoJdbc implements RepositorioPlantao {
         }
     }
 
+    /** Uma única consulta (instantâneo coerente); RLS limita tudo à unidade ativa. */
     @Override
-    public Nomes nomes(Collection<UUID> episodios, Collection<UUID> pendencias) {
-        Map<UUID, String> pacientes = new HashMap<>();
-        if (!episodios.isEmpty()) {
-            jdbc.sql("""
-                    SELECT e.id, pa.nome FROM fluxo.episodio e JOIN fluxo.paciente pa ON pa.id = e.paciente_id
-                     WHERE e.id = ANY (CAST(? AS uuid[]))
-                    """)
-                .param(array(episodios))
-                .query((rs, n) -> pacientes.put(uuid(rs, 1), rs.getString(2)))
-                .list();
+    public Nomes nomes(Referencias ref) {
+        Map<String, Map<UUID, String>> porTipo = new HashMap<>();
+        for (String t : List.of("P", "D", "S", "E", "M", "U")) {
+            porTipo.put(t, new HashMap<>());
         }
-        Map<UUID, String> descricoes = new HashMap<>();
-        if (!pendencias.isEmpty()) {
-            jdbc.sql("SELECT id, descricao FROM fluxo.pendencia WHERE id = ANY (CAST(? AS uuid[]))")
-                .param(array(pendencias))
-                .query((rs, n) -> descricoes.put(uuid(rs, 1), rs.getString(2)))
-                .list();
-        }
-        return new Nomes(pacientes, descricoes);
+        jdbc.sql("""
+                SELECT 'P', e.id, pa.nome FROM fluxo.episodio e JOIN fluxo.paciente pa ON pa.id = e.paciente_id
+                 WHERE e.id = ANY (CAST(? AS uuid[]))
+                UNION ALL SELECT 'D', id, descricao FROM fluxo.pendencia WHERE id = ANY (CAST(? AS uuid[]))
+                UNION ALL SELECT 'S', id, nome FROM fluxo.setor WHERE id = ANY (CAST(? AS uuid[]))
+                UNION ALL SELECT 'E', id, nome FROM fluxo.etapa WHERE id = ANY (CAST(? AS uuid[]))
+                UNION ALL SELECT 'M', id, descricao FROM fluxo.motivo_bloqueio WHERE id = ANY (CAST(? AS uuid[]))
+                UNION ALL SELECT 'U', id, nome FROM fluxo.usuario WHERE id = ANY (CAST(? AS uuid[]))
+                """)
+            .param(array(ref.episodios())).param(array(ref.pendencias())).param(array(ref.setores()))
+            .param(array(ref.etapas())).param(array(ref.motivos())).param(array(ref.profissionais()))
+            .query((rs, n) -> {
+                String valor = rs.getString(3);
+                if (valor != null) {
+                    porTipo.get(rs.getString(1)).put(uuid(rs, 2), valor);
+                }
+                return null;
+            })
+            .list();
+        return new Nomes(porTipo.get("P"), porTipo.get("D"), porTipo.get("S"), porTipo.get("E"), porTipo.get("M"),
+                porTipo.get("U"));
     }
 
     @Override
     public void auditar(String acao, UUID passagemId, Map<String, Object> dados) {
         jdbc.sql("SELECT auditoria.registrar(?, 'fluxo.passagem_plantao', ?, CAST(? AS jsonb), (fluxo.ctx_unidades())[1])")
             .param(acao).param(passagemId.toString()).param(json(dados))
+            .query(Long.class).single();
+    }
+
+    /**
+     * Leitura nominal: {@code auditoria.registrar_consulta} (V17) grava o conjunto de episódios uma
+     * única vez por unidade, endereçado pelo SHA-256 da lista ordenada, e acrescenta à cadeia de
+     * auditoria um registro com ator, unidade, origem, a passagem (se houver), o hash do conjunto e
+     * a contagem. Nenhum nome ou descrição.
+     */
+    @Override
+    public void auditarConsulta(String acao, UUID passagemId, Collection<UUID> episodios, Map<String, Object> dados) {
+        jdbc.sql("""
+                SELECT auditoria.registrar_consulta(?, 'fluxo.passagem_plantao', CAST(? AS text), CAST(? AS uuid[]),
+                                                    CAST(? AS jsonb), (fluxo.ctx_unidades())[1])
+                """)
+            .param(acao).param(passagemId == null ? null : passagemId.toString()).param(array(episodios))
+            .param(json(dados))
             .query(Long.class).single();
     }
 

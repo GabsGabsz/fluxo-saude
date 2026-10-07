@@ -23,6 +23,7 @@ import br.fluxosaude.plantao.aplicacao.RepositorioPlantao;
 import br.fluxosaude.plantao.aplicacao.ServicoPlantao;
 import br.fluxosaude.plantao.aplicacao.TransacaoPlantao;
 import br.fluxosaude.plantao.dominio.CasoAtual;
+import br.fluxosaude.plantao.dominio.Comparacao;
 import br.fluxosaude.plantao.dominio.ConteudoPassagem;
 import br.fluxosaude.plantao.dominio.PendenciaAtual;
 import java.time.Clock;
@@ -77,6 +78,7 @@ class ServicoPlantaoTest {
         final Map<UUID, Passagem> passagens = new LinkedHashMap<>();
         final Map<UUID, ConteudoPassagem> conteudos = new HashMap<>();
         final List<String> auditoria = new ArrayList<>();
+        final List<Consulta> consultas = new ArrayList<>();
         Relogio relogio;
         UsuarioAutenticado atual;
 
@@ -155,18 +157,29 @@ class ServicoPlantaoTest {
         }
 
         @Override
-        public Nomes nomes(Collection<UUID> episodios, Collection<UUID> pendencias) {
+        public Nomes nomes(Referencias ref) {
             Map<UUID, String> pac = new HashMap<>();
-            episodios.forEach(e -> pac.put(e, "Paciente " + e.toString().substring(30)));
+            ref.episodios().forEach(e -> pac.put(e, "Paciente " + e.toString().substring(30)));
             Map<UUID, String> pend = new HashMap<>();
-            pendencias.forEach(p -> pend.put(p, "Ação " + p.toString().substring(30)));
-            return new Nomes(pac, pend);
+            ref.pendencias().forEach(p -> pend.put(p, "Ação " + p.toString().substring(30)));
+            Map<UUID, String> setores = new HashMap<>();
+            ref.setores().forEach(s -> setores.put(s, "Setor " + s.toString().substring(30)));
+            return new Nomes(pac, pend, setores, Map.of(), Map.of(), Map.of());
         }
 
         @Override
         public void auditar(String acao, UUID passagemId, Map<String, Object> dados) {
             auditoria.add(acao);
         }
+
+        @Override
+        public void auditarConsulta(String acao, UUID passagemId, Collection<UUID> episodios, Map<String, Object> dados) {
+            auditoria.add(acao);
+            consultas.add(new Consulta(acao, passagemId, Set.copyOf(episodios), Map.copyOf(dados)));
+        }
+    }
+
+    record Consulta(String acao, UUID passagemId, Set<UUID> episodios, Map<String, Object> dados) {
     }
 
     Banco banco;
@@ -221,7 +234,8 @@ class ServicoPlantaoTest {
         servico.receber(medico, ORIGEM, id, p.versao(), d.assinaturaRecebimento());
         assertEquals("RECEBIDA", banco.passagens.get(id).status());
         assertEquals(medico.usuarioId(), banco.passagens.get(id).recebidaPor());
-        assertEquals(List.of("PASSAGEM_ENTREGUE", "PASSAGEM_RECEBIDA"), banco.auditoria);
+        assertEquals(List.of("PASSAGEM_ENTREGUE", "PASSAGEM_RECEBIDA"),
+                banco.auditoria.stream().filter(a -> a.startsWith("PASSAGEM_")).toList());
 
         // A próxima passagem representa o período desde a entrega da última recebida.
         relogio.agora = T0.plus(Duration.ofHours(12));
@@ -325,6 +339,92 @@ class ServicoPlantaoTest {
         banco.casos.remove(0);
         assertEquals(ServicoPlantao.LIMITE_CASOS, servico.previa(enf, ORIGEM).conteudo().totalCasos(),
                 "no limite: todos os casos, sem paginação");
+    }
+
+    /** Revisão do PR #10, ponto 3: prévia e detalhe registram a leitura nominal, só com referências. */
+    @Test
+    void leiturasNominaisSaoRegistradasSemNomes() {
+        ServicoPlantao.Previa previa = servico.previa(enf, ORIGEM);
+        Consulta c1 = banco.consultas.get(0);
+        assertEquals(ServicoPlantao.CONSULTA_PREVIA, c1.acao());
+        assertNull(c1.passagemId(), "prévia: o conteúdo ainda não é registro");
+        assertEquals(Set.of(new UUID(0, 1), new UUID(0, 2)), c1.episodios(), "todos os casos exibidos");
+        assertEquals(previa.assinatura(), c1.dados().get("assinatura"));
+        assertEquals(Integer.valueOf(2), c1.dados().get("casos"));
+
+        UUID id = servico.entregar(enf, ORIGEM, previa.assinatura(), null);
+        banco.casos.add(caso(3, 0, List.of()));                           // caso novo após a entrega
+        servico.obter(medico, ORIGEM, id);
+        Consulta c2 = banco.consultas.get(1);
+        assertEquals(ServicoPlantao.CONSULTA_PASSAGEM, c2.acao());
+        assertEquals(id, c2.passagemId(), "o conteúdo entregue é referenciado pela própria passagem");
+        assertEquals(Set.of(new UUID(0, 3)), c2.episodios(), "registra só os casos exibidos além do entregue");
+        assertEquals("ENTREGUE", c2.dados().get("status"));
+
+        ServicoPlantao.Detalhe d = servico.obter(medico, ORIGEM, id);
+        servico.receber(medico, ORIGEM, id, 0, d.assinaturaRecebimento());
+        servico.obter(medico, ORIGEM, id);
+        Consulta c4 = banco.consultas.get(3);
+        assertEquals(Set.of(), c4.episodios(), "passagem recebida: só o conteúdo entregue é exibido");
+        assertEquals("RECEBIDA", c4.dados().get("status"));
+        for (Consulta c : banco.consultas) {
+            assertFalse(c.dados().toString().contains("Paciente") || c.dados().toString().contains("Ação"),
+                    "nenhum nome ou descrição nos dados registrados");
+        }
+
+        // Leitura recusada não gera registro de leitura.
+        int antes = banco.consultas.size();
+        assertThrows(RecursoNaoEncontradoException.class, () -> servico.obter(medico, ORIGEM, UUID.randomUUID()));
+        assertThrows(AcessoNegadoException.class, () -> servico.previa(usuario(Papel.DIRECAO), ORIGEM));
+        assertEquals(antes, banco.consultas.size());
+    }
+
+    /**
+     * Revisão do PR #10, ponto 2: o detalhe traz, para cada mudança, o valor entregue e o ATUAL
+     * (responsável, prazo, etapa, setor, motivo), com a pendência vinculada ao caso; e a assinatura
+     * do recebimento muda quando a situação exibida muda.
+     */
+    @Test
+    void detalheMostraValoresAtuaisDasMudancasEAssinaturaAcompanha() {
+        UUID id = servico.entregar(enf, ORIGEM, servico.previa(enf, ORIGEM).assinatura(), null);
+        UUID novoSetor = new UUID(2, 9);
+        UUID motivo = new UUID(4, 1);
+        Instant novoPrazo = T0.plus(Duration.ofHours(6));
+        PendenciaAtual alterada = new PendenciaAtual(new UUID(3, 1), 1, CategoriaBloqueio.LOGISTICA,
+                CriticidadeOperacional.ALTA, novoPrazo, null, novoSetor, null);
+        banco.casos.set(0, new CasoAtual(new UUID(0, 1), 1, new UUID(1, 2), NaturezaEtapa.ESPERA, new UUID(2, 2), motivo,
+                CategoriaBloqueio.LEITO_CAPACIDADE, T0, T0.minus(Duration.ofHours(5)), T0, T0, false, false, List.of(alterada)));
+
+        ServicoPlantao.Detalhe d = servico.obter(medico, ORIGEM, id);
+        Comparacao.Caso caso = d.comparacao().casos().get(0);
+        assertEquals(Comparacao.Tipo.ALTERADO, caso.tipo());
+        assertEquals(List.of(Comparacao.CampoCaso.ETAPA, Comparacao.CampoCaso.MOTIVO_BLOQUEIO), caso.campos());
+        assertEquals(new UUID(1, 1), caso.entregue().etapaId());
+        assertEquals(new UUID(1, 2), caso.atual().etapaId());
+        assertNull(caso.entregue().motivoId());
+        assertEquals(motivo, caso.atual().motivoId());
+        Comparacao.Pendencia p = d.comparacao().pendencias().get(0);
+        assertEquals(new UUID(0, 1), p.episodioId(), "pendência vinculada ao caso");
+        assertEquals(List.of(Comparacao.CampoPendencia.RESPONSAVEL, Comparacao.CampoPendencia.PRAZO), p.campos());
+        assertEquals(new UUID(2, 2), p.entregue().responsavelSetorId());
+        assertEquals(novoSetor, p.atual().responsavelSetorId());
+        assertEquals(novoPrazo, p.atual().prazo());
+        assertEquals("Setor " + novoSetor.toString().substring(30), d.nomes().setores().get(novoSetor),
+                "rótulo do novo responsável lido do estado atual");
+        assertEquals(1, d.comparacao().casos().size(), "caso 2 não mudou e não aparece");
+
+        // Mudança DEPOIS da leitura (só o prazo de novo): assinatura anterior recusada, nada gravado.
+        banco.casos.set(0, new CasoAtual(new UUID(0, 1), 1, new UUID(1, 2), NaturezaEtapa.ESPERA, new UUID(2, 2), motivo,
+                CategoriaBloqueio.LEITO_CAPACIDADE, T0, T0.minus(Duration.ofHours(5)), T0, T0, false, false,
+                List.of(new PendenciaAtual(new UUID(3, 1), 2, CategoriaBloqueio.LOGISTICA, CriticidadeOperacional.ALTA,
+                        novoPrazo.plus(Duration.ofHours(1)), null, novoSetor, null))));
+        assertEquals("RECEBIMENTO_DESATUALIZADO", assertThrows(ConflitoDeEstadoException.class,
+                () -> servico.receber(medico, ORIGEM, id, 0, d.assinaturaRecebimento())).codigo());
+        assertEquals("ENTREGUE", banco.passagens.get(id).status());
+        ServicoPlantao.Detalhe relido = servico.obter(medico, ORIGEM, id);
+        assertEquals(novoPrazo.plus(Duration.ofHours(1)), relido.comparacao().pendencias().get(0).atual().prazo());
+        servico.receber(medico, ORIGEM, id, 0, relido.assinaturaRecebimento());
+        assertEquals("RECEBIDA", banco.passagens.get(id).status());
     }
 
     @Test

@@ -3,15 +3,18 @@
 // permissões, troca de unidade e sessão revogada. Cada alteração "concorrente" é feita pela API
 // DEPOIS que a tela exibiu o conteúdo e ANTES do clique — sem esperas arbitrárias.
 import { test, expect } from '@playwright/test';
-import { entrar, escolherUnidade, capturar, clienteApi, garantirEpisodio, FIX, NORTE, SUL } from './apoio.mjs';
+import { entrar, escolherUnidade, capturar, clienteApi, garantirEpisodio, abrirEpisodio, localNoFuso, FIX, NORTE, SUL }
+  from './apoio.mjs';
 
 const alfa = FIX.pacientes.find((p) => p.nome.endsWith('Alfa'));
 
-test('entrega e recebimento por outro profissional, com conteúdo alterado antes de cada confirmação', async ({ page, browser, baseURL }) => {
+test('entrega e recebimento por outro profissional: situação atual (antes × agora) e conteúdo alterado antes de cada confirmação', async ({ page, browser, baseURL }) => {
   const coordApi = await clienteApi(baseURL, 'coord.e2e');
   await coordApi.usarUnidade(NORTE.codigo);
   const episodio = await garantirEpisodio(coordApi, { cns: alfa.cns, nome: alfa.nome, setorNome: NORTE.setores[0][1] });
   const setor = (await coordApi.get('/api/catalogo')).setores.find((s) => s.nome === NORTE.setores[0][1]);
+  // Caso próprio deste cenário (etapa/motivo mudam depois da entrega sem mexer nos casos de outros testes).
+  const kappa = await abrirEpisodio(coordApi, { novoPaciente: { nome: 'Paciente Ficticio Kappa' }, setorNome: NORTE.setores[0][1] });
 
   // ------------------------------------------------------------ preparação (enfermagem)
   await entrar(page, 'enf.e2e');
@@ -49,6 +52,17 @@ test('entrega e recebimento por outro profissional, com conteúdo alterado antes
   await capturar(page, '08-passagem-entregue');
   const id = page.url().split('/').pop();
 
+  // ------------------------------------------------------------ mudanças DEPOIS da entrega (outra pessoa)
+  // Pendência: responsável (setor → perfil médico) e prazo; caso Kappa: etapa e motivo do bloqueio.
+  const prazoNovo = new Date(Math.floor((Date.now() + 9 * 3600_000) / 60_000) * 60_000).toISOString();
+  await coordApi.patch(`/api/pendencias/${pend.id}`, { versao: 0, responsavel: { papel: 'MEDICO' }, prazo: prazoNovo });
+  const cat = await coordApi.get('/api/catalogo');
+  const etapaLeito = cat.etapas.find((e) => e.codigo === 'AGUARDANDO_RECURSO_LEITO');
+  const semLeito = cat.motivos.find((m) => m.codigo === 'SEM_LEITO_ESPECIALIDADE');
+  const semCapacidade = cat.motivos.find((m) => m.codigo === 'DESTINO_SEM_CAPACIDADE');
+  await coordApi.put(`/api/episodios/${kappa}/etapa`,
+    { versao: (await coordApi.get(`/api/episodios/${kappa}`)).resumo.versao, etapaId: etapaLeito.id, motivoId: semLeito.id });
+
   // ------------------------------------------------------------ recebimento (coordenação, outro profissional)
   const contexto = await browser.newContext({ baseURL });
   const outra = await contexto.newPage();
@@ -56,11 +70,26 @@ test('entrega e recebimento por outro profissional, com conteúdo alterado antes
   await escolherUnidade(outra, NORTE.nome);
   await outra.getByRole('link', { name: 'Passagem de plantão' }).click();
   await outra.getByRole('link', { name: 'Abrir passagem pendente' }).click();
-  await expect(outra.getByText('Nenhuma diferença entre o conteúdo entregue e a situação atual.')).toBeVisible();
 
-  // A pendência é resolvida por outra pessoa DEPOIS que o recebedor abriu a passagem.
-  const enfApi = await clienteApi(baseURL, 'enf.e2e');
-  await enfApi.post(`/api/pendencias/${pend.id}/resolucao`, { versao: 0, texto: 'Ambulancia confirmada' }, 200);
+  // A tela mostra a SITUAÇÃO ATUAL (valores novos) ao lado do que foi entregue, antes de confirmar.
+  const situacao = outra.getByRole('region', { name: 'Recebimento' });
+  await expect(situacao).toContainText('Situação atual');
+  const pendItem = situacao.locator(`[data-pendencia="${pend.id}"]`);
+  await expect(pendItem).toContainText(`Setor: ${setor.nome}`);                     // na entrega
+  await expect(pendItem).toContainText('Perfil: Médico');                            // agora
+  await expect(pendItem).toContainText(dataHoraNorte(prazo));                        // prazo na entrega
+  await expect(pendItem).toContainText(dataHoraNorte(prazoNovo));                    // prazo atual
+  await expect(pendItem.getByRole('link', { name: alfa.nome })).toHaveAttribute('href', `#/episodio/${episodio}`);
+  const casoItem = situacao.locator(`[data-caso="${kappa}"]`);
+  await expect(casoItem).toContainText('Em atendimento');
+  await expect(casoItem).toContainText(etapaLeito.nome);
+  await expect(casoItem).toContainText(semLeito.descricao);
+  await expect(outra.getByRole('region', { name: 'Conteúdo entregue' })).toContainText('Mudou depois da entrega');
+  await capturar(outra, '08-recebimento-situacao-atual');
+
+  // OUTRA mudança depois da leitura (motivo do caso Kappa): a assinatura vista não vale mais.
+  await coordApi.put(`/api/episodios/${kappa}/motivo`,
+    { versao: (await coordApi.get(`/api/episodios/${kappa}`)).resumo.versao, motivoId: semCapacidade.id });
   const receber = outra.getByRole('form', { name: 'Confirmar recebimento' });
   const [velha] = await Promise.all([
     outra.waitForResponse((r) => r.url().endsWith('/recebimento')),
@@ -69,26 +98,41 @@ test('entrega e recebimento por outro profissional, com conteúdo alterado antes
   expect(velha.status()).toBe(409);
   expect((await velha.json()).codigo).toBe('RECEBIMENTO_DESATUALIZADO');
   await expect(receber.getByRole('alert')).toContainText('A situação mudou desde que você abriu a passagem');
-  expect((await coordApi.get(`/api/plantao/passagens/${id}`)).passagem.status).toBe('ENTREGUE'); // nada confirmado
+  const naoConfirmada = (await coordApi.get(`/api/plantao/passagens/${id}`)).passagem;  // nada gravado
+  expect(naoConfirmada.status).toBe('ENTREGUE');
+  expect(naoConfirmada.recebidaPor).toBeNull();
+  expect(naoConfirmada.versao).toBe(0);
 
+  // Nova leitura explícita: o novo motivo aparece; só então a confirmação.
   await receber.getByRole('button', { name: 'Recarregar dados' }).click();
-  await expect(outra.getByRole('region', { name: 'Recebimento' })).toContainText('Pendências encerradas (1)');
+  await expect(outra.getByRole('region', { name: 'Recebimento' }).locator(`[data-caso="${kappa}"]`))
+    .toContainText(semCapacidade.descricao);
+  await expect(outra.getByRole('region', { name: 'Recebimento' }).locator(`[data-pendencia="${pend.id}"]`))
+    .toContainText('Perfil: Médico');
   await capturar(outra, '08-recebimento-com-diferencas');
   await outra.getByRole('form', { name: 'Confirmar recebimento' }).getByRole('button', { name: 'Confirmar recebimento' }).click();
   await expect(outra.getByRole('heading', { name: 'Passagem recebida' })).toBeVisible();
   await expect(outra.getByRole('region', { name: 'Registro da passagem' })).toContainText('Caio Coordenador Ficticio');
   const final = await coordApi.get(`/api/plantao/passagens/${id}`);
   expect(final.passagem.status).toBe('RECEBIDA');
-  expect(final.passagem.diferencasRecebimento.pendenciasEncerradas).toBe(1);
-  // A passagem não resolveu nem alterou nada por conta própria: a pendência foi resolvida pela enfermagem.
+  expect(final.passagem.diferencasRecebimento.casosAlterados).toBe(1);
+  expect(final.passagem.diferencasRecebimento.pendenciasAlteradas).toBe(1);
+  // A passagem não alterou nada por conta própria: os valores são os que as pessoas gravaram.
   const caso = await coordApi.get(`/api/episodios/${episodio}`);
-  expect(caso.pendencias.find((p) => p.id === pend.id).status).toBe('RESOLVIDA');
+  const pendFinal = caso.pendencias.find((p) => p.id === pend.id);
+  expect(pendFinal.status).toBe('ABERTA');
   expect(caso.encerradoEm).toBeNull();
   await capturar(outra, '08-passagem-recebida');
   await contexto.close();
   await coordApi.fechar();
-  await enfApi.fechar();
 });
+
+/** Mesmo formato da tela (dd/mm/aaaa hh:mm) no fuso da unidade Norte. */
+function dataHoraNorte(iso) {
+  const [data, hora] = localNoFuso(Date.parse(iso), NORTE.fuso).split('T');
+  const [a, m, d] = data.split('-');
+  return `${d}/${m}/${a} ${hora}`;
+}
 
 test('quem entregou não confirma o próprio recebimento; pode cancelar com justificativa', async ({ page, baseURL }) => {
   await entrar(page, 'enf.e2e');

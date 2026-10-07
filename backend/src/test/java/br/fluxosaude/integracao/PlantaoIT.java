@@ -10,6 +10,8 @@ import java.net.http.HttpResponse;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.BeforeEach;
@@ -35,6 +37,10 @@ class PlantaoIT extends IntegracaoBase {
     static UUID unidadeV;
     static UUID unidadeC;
     static UUID setorC;
+    static UUID unidadeR;
+    static UUID setorR1;
+    static UUID unidadeA;
+    static UUID setorA;
     private static final AtomicBoolean PREPARADO = new AtomicBoolean();
 
     @Autowired
@@ -67,6 +73,16 @@ class PlantaoIT extends IntegracaoBase {
                 usuario(c, "enf.v.plantao", "Enfermagem V", hash, unidadeV, "ENFERMAGEM");
                 usuario(c, "enf.c.plantao", "Enfermagem C", hash, unidadeC, "ENFERMAGEM");
                 usuario(c, "med.c.plantao", "Medicina C", hash, unidadeC, "MEDICO");
+                // R: recebimento com mudanças (antes/depois); A: registro das leituras nominais.
+                unidadeR = unidade(c, "UPA_PLANT_R", "UPA Plantao R");
+                setorR1 = setor(c, unidadeR, "OBS_R", "Observacao R");
+                usuario(c, "enf.r.plantao", "Enfermagem R", hash, unidadeR, "ENFERMAGEM");
+                usuario(c, "med.r.plantao", "Medicina R", hash, unidadeR, "MEDICO");
+                unidadeA = unidade(c, "UPA_PLANT_A", "UPA Plantao A");
+                setorA = setor(c, unidadeA, "OBS_A", "Observacao A");
+                usuario(c, "enf.a.plantao", "Enfermagem A", hash, unidadeA, "ENFERMAGEM");
+                usuario(c, "med.a.plantao", "Medicina A", hash, unidadeA, "MEDICO");
+                usuario(c, "dir.a.plantao", "Direcao A", hash, unidadeA, "DIRECAO");
                 assertTrue(adm != null);
                 c.commit();
             }
@@ -272,7 +288,267 @@ class PlantaoIT extends IntegracaoBase {
         assertEquals(entregueEm, texto(previa.get("periodoInicio")));
     }
 
+    /**
+     * Revisão do PR #10, ponto 2: o recebimento assina a situação atual, então ela tem de vir na
+     * resposta (e na tela) com os valores NOVOS. Entrega → muda responsável/prazo de uma pendência e
+     * etapa/motivo de um caso → o detalhe traz entregue × atual → outra mudança depois da leitura →
+     * 409 sem gravar nada → nova leitura com os novos valores → recebimento confirmado.
+     */
+    @Test
+    void recebimentoMostraSituacaoAtualComAntesEDepois() throws Exception {
+        ClienteHttp enf = cliente("enf.r.plantao");
+        ClienteHttp med = cliente("med.r.plantao");
+        String ep = abrir(enf, "Paciente Ficticio Recebimento", setorR1);
+        String prazo1 = java.time.Instant.now().plusSeconds(4 * 3600).truncatedTo(java.time.temporal.ChronoUnit.SECONDS)
+                .toString();
+        String pend = texto(json.readTree(exigir(201, enf.enviar("POST", "/api/episodios/" + ep + "/pendencias",
+                "{\"categoria\":\"LOGISTICA\",\"descricao\":\"Confirmar vaga de retaguarda\",\"responsavel\":{\"setorId\":\""
+                + setorR1 + "\"},\"prazo\":\"" + prazo1 + "\",\"criticidade\":\"MEDIA\"}")).body()).get("id"));
+
+        // ---------------------------------------------------------------- 1. entrega
+        JsonNode previa = json.readTree(exigir(200, enf.enviar("GET", "/api/plantao/previa", null)).body());
+        String id = texto(json.readTree(exigir(201, enf.enviar("POST", "/api/plantao/passagens",
+                "{\"assinatura\":\"" + texto(previa.get("assinatura")) + "\"}")).body()).get("id"));
+
+        // ---------------------------------------------------------------- 2. responsável/prazo e etapa/motivo
+        String prazo2 = java.time.Instant.now().plusSeconds(8 * 3600).truncatedTo(java.time.temporal.ChronoUnit.SECONDS)
+                .toString();
+        exigir(200, med.enviar("PATCH", "/api/pendencias/" + pend,
+                "{\"versao\":0,\"responsavel\":{\"papel\":\"MEDICO\"},\"prazo\":\"" + prazo2 + "\"}"));
+        int versao = versaoEpisodio(med, ep);
+        exigir(200, med.enviar("PUT", "/api/episodios/" + ep + "/etapa", "{\"versao\":" + versao + ",\"etapaId\":\""
+                + idCatalogo("fluxo.etapa", unidadeR, "AGUARDANDO_RECURSO_LEITO") + "\",\"motivoId\":\""
+                + idCatalogo("fluxo.motivo_bloqueio", unidadeR, "SEM_LEITO_ESPECIALIDADE") + "\"}"));
+
+        // ---------------------------------------------------------------- 3. leitura: entregue × atual
+        JsonNode d = json.readTree(exigir(200, med.enviar("GET", "/api/plantao/passagens/" + id, null)).body());
+        assertEquals("Em atendimento", texto(d.get("casos").get(0).get("etapaNome")), "conteúdo ENTREGUE inalterado");
+        JsonNode caso = d.get("diferencas").get("casosAlterados").get(0);
+        assertEquals(ep, texto(caso.get("episodioId")));
+        assertEquals("Paciente Ficticio Recebimento", texto(caso.get("pacienteNome")));
+        assertTrue(caso.get("campos").toString().contains("ETAPA"));
+        assertTrue(caso.get("campos").toString().contains("MOTIVO_BLOQUEIO"));
+        assertEquals("Em atendimento", texto(caso.get("entregue").get("etapaNome")));
+        assertTrue(caso.get("entregue").get("motivoId").isNull());
+        assertEquals("Aguardando recurso/leito", texto(caso.get("atual").get("etapaNome")));
+        assertEquals("Sem leito na especialidade", texto(caso.get("atual").get("motivoDescricao")));
+        assertEquals("Observacao R", texto(caso.get("atual").get("setorNome")));
+        JsonNode p = d.get("diferencas").get("pendenciasAlteradas").get(0);
+        assertEquals(pend, texto(p.get("id")));
+        assertEquals(ep, texto(p.get("episodioId")), "pendência vinculada ao caso");
+        assertEquals("Paciente Ficticio Recebimento", texto(p.get("pacienteNome")));
+        assertEquals("Confirmar vaga de retaguarda", texto(p.get("descricao")));
+        assertEquals("[\"RESPONSAVEL\",\"PRAZO\"]", p.get("campos").toString());
+        assertEquals(setorR1.toString(), texto(p.get("entregue").get("responsavelSetorId")));
+        assertEquals("Observacao R", texto(p.get("entregue").get("responsavelNome")));
+        assertEquals(java.time.Instant.parse(prazo1), java.time.Instant.parse(texto(p.get("entregue").get("prazo"))));
+        assertEquals("MEDICO", texto(p.get("atual").get("responsavelPapel")));
+        assertTrue(p.get("atual").get("responsavelSetorId").isNull());
+        assertEquals(java.time.Instant.parse(prazo2), java.time.Instant.parse(texto(p.get("atual").get("prazo"))));
+        assertEquals(1, d.get("totaisAtuais").get("casos").asInt());
+        String assinaturaLida = texto(d.get("assinaturaRecebimento"));
+
+        // ---------------------------------------------------------------- 4. outra mudança depois da leitura
+        versao = versaoEpisodio(med, ep);
+        exigir(200, enf.enviar("PUT", "/api/episodios/" + ep + "/motivo", "{\"versao\":" + versao + ",\"motivoId\":\""
+                + idCatalogo("fluxo.motivo_bloqueio", unidadeR, "DESTINO_SEM_CAPACIDADE") + "\"}"));
+
+        // ---------------------------------------------------------------- 5. 409 sem gravar nada
+        HttpResponse<String> velha = med.enviar("POST", "/api/plantao/passagens/" + id + "/recebimento",
+                "{\"versao\":0,\"assinatura\":\"" + assinaturaLida + "\"}");
+        assertEquals(409, velha.statusCode());
+        assertTrue(velha.body().contains("RECEBIMENTO_DESATUALIZADO"));
+        try (Connection c = conexaoDono();
+             PreparedStatement ps = c.prepareStatement("SELECT status::text, recebida_por, assinatura_recebimento, versao, "
+                     + "(SELECT count(*) FROM auditoria.registro r WHERE r.recurso_id = p.id::text AND r.acao = 'PASSAGEM_RECEBIDA') "
+                     + "FROM fluxo.passagem_plantao p WHERE id = ?")) {
+            ps.setObject(1, UUID.fromString(id));
+            try (ResultSet rs = ps.executeQuery()) {
+                assertTrue(rs.next());
+                assertEquals("ENTREGUE", rs.getString(1));
+                assertEquals(null, rs.getObject(2));
+                assertEquals(null, rs.getString(3));
+                assertEquals(0, rs.getInt(4));
+                assertEquals(0, rs.getInt(5), "nenhum registro de recebimento");
+            }
+        }
+
+        // ---------------------------------------------------------------- 6. nova leitura explícita + recebimento
+        d = json.readTree(exigir(200, med.enviar("GET", "/api/plantao/passagens/" + id, null)).body());
+        caso = d.get("diferencas").get("casosAlterados").get(0);
+        assertEquals("Unidade de destino sem capacidade", texto(caso.get("atual").get("motivoDescricao")));
+        assertEquals("MEDICO", texto(d.get("diferencas").get("pendenciasAlteradas").get(0).get("atual").get("responsavelPapel")));
+        String nova = texto(d.get("assinaturaRecebimento"));
+        assertFalse(nova.equals(assinaturaLida));
+        exigir(204, med.enviar("POST", "/api/plantao/passagens/" + id + "/recebimento",
+                "{\"versao\":0,\"assinatura\":\"" + nova + "\"}"));
+        JsonNode recebida = json.readTree(exigir(200, med.enviar("GET", "/api/plantao/passagens/" + id, null)).body());
+        assertEquals("RECEBIDA", texto(recebida.get("passagem").get("status")));
+        assertEquals(1, recebida.get("passagem").get("diferencasRecebimento").get("casosAlterados").asInt());
+        assertEquals(1, recebida.get("passagem").get("diferencasRecebimento").get("pendenciasAlteradas").asInt());
+        // A passagem não mexeu na pendência nem no caso: valores são os que os usuários gravaram.
+        JsonNode atual = json.readTree(exigir(200, med.enviar("GET", "/api/episodios/" + ep, null)).body());
+        assertEquals("ABERTA", texto(atual.get("pendencias").get(0).get("status")));
+        assertTrue(atual.get("encerradoEm").isNull());
+    }
+
+    /**
+     * Revisão do PR #10, ponto 3: prévia e detalhe registram a leitura nominal (ator, unidade,
+     * referências) sem copiar nomes ou descrições; leitura recusada ou de outra unidade não gera
+     * registro na unidade alheia.
+     */
+    @Test
+    void leiturasNominaisDaPassagemSaoRegistradasSemNomes() throws Exception {
+        ClienteHttp enf = cliente("enf.a.plantao");
+        ClienteHttp med = cliente("med.a.plantao");
+        String ep1 = abrir(enf, "Paciente Ficticio Auditoria Um", setorA);
+        String ep2 = abrir(enf, "Paciente Ficticio Auditoria Dois", setorA);
+        exigir(201, enf.enviar("POST", "/api/episodios/" + ep1 + "/pendencias",
+                "{\"categoria\":\"LOGISTICA\",\"descricao\":\"Descricao sigilosa da pendencia\",\"responsavel\":{\"setorId\":\""
+                + setorA + "\"},\"prazo\":\"" + java.time.Instant.now().plusSeconds(3 * 3600) + "\",\"criticidade\":\"BAIXA\"}"));
+        UUID idEnf = idUsuario("enf.a.plantao");
+        UUID idMed = idUsuario("med.a.plantao");
+
+        // ---------------------------------------------------------------- prévia
+        long marco = ultimoRegistro();
+        JsonNode previa = json.readTree(exigir(200, enf.enviar("GET", "/api/plantao/previa", null)).body());
+        List<Registro> regs = registros(marco, "CONSULTA_PREVIA_PASSAGEM");
+        assertEquals(1, regs.size());
+        Registro r = regs.get(0);
+        assertEquals(idEnf, r.usuario());
+        assertEquals(unidadeA, r.unidade());
+        assertEquals("fluxo.passagem_plantao", r.recurso());
+        assertEquals(null, r.recursoId());
+        JsonNode dados = json.readTree(r.dados());
+        assertEquals(2, dados.get("episodios").asInt());
+        assertEquals(2, dados.get("casos").asInt());
+        assertEquals(texto(previa.get("assinatura")), texto(dados.get("assinatura")));
+        assertEquals(sorted(ep1, ep2), conjunto(unidadeA, texto(dados.get("conjunto"))), "referências = casos exibidos");
+        semNominal(r.dados(), ep1, ep2);
+
+        // ---------------------------------------------------------------- detalhe (com caso novo além do entregue)
+        String id = texto(json.readTree(exigir(201, enf.enviar("POST", "/api/plantao/passagens",
+                "{\"assinatura\":\"" + texto(previa.get("assinatura")) + "\"}")).body()).get("id"));
+        String ep3 = abrir(enf, "Paciente Ficticio Auditoria Tres", setorA);
+        marco = ultimoRegistro();
+        exigir(200, med.enviar("GET", "/api/plantao/passagens/" + id, null));
+        regs = registros(marco, "CONSULTA_PASSAGEM");
+        assertEquals(1, regs.size());
+        r = regs.get(0);
+        assertEquals(idMed, r.usuario());
+        assertEquals(unidadeA, r.unidade());
+        assertEquals(id, r.recursoId(), "o conteúdo entregue é referenciado pela própria passagem");
+        dados = json.readTree(r.dados());
+        assertEquals("ENTREGUE", texto(dados.get("status")));
+        assertEquals(List.of(ep3), conjunto(unidadeA, texto(dados.get("conjunto"))), "só os exibidos além do entregue");
+        semNominal(r.dados(), ep1, ep2, ep3);
+
+        // ---------------------------------------------------------------- isolamento e recusas
+        marco = ultimoRegistro();
+        ClienteHttp outra = cliente("coord.q.plantao");
+        exigir(404, outra.enviar("GET", "/api/plantao/passagens/" + id, null));
+        exigir(403, cliente("dir.a.plantao").enviar("GET", "/api/plantao/previa", null));
+        assertEquals(0, registros(marco, "CONSULTA_PASSAGEM").size(), "leitura recusada não é registrada como leitura");
+        assertEquals(0, registros(marco, "CONSULTA_PREVIA_PASSAGEM").size());
+        exigir(200, outra.enviar("GET", "/api/plantao/previa", null));
+        regs = registros(marco, "CONSULTA_PREVIA_PASSAGEM");
+        assertEquals(1, regs.size());
+        assertEquals(unidadeQ, regs.get(0).unidade(), "registro na unidade de quem leu");
+        List<String> daOutra = conjunto(unidadeQ, texto(json.readTree(regs.get(0).dados()).get("conjunto")));
+        assertFalse(daOutra.contains(ep1) || daOutra.contains(ep2) || daOutra.contains(ep3), "nada da unidade A");
+    }
+
     // ----------------------------------------------------------------------------
+
+    record Registro(UUID usuario, UUID unidade, String recurso, String recursoId, String dados) {
+    }
+
+    private static long ultimoRegistro() throws Exception {
+        try (Connection c = conexaoDono();
+             PreparedStatement ps = c.prepareStatement("SELECT coalesce(max(id), 0) FROM auditoria.registro");
+             ResultSet rs = ps.executeQuery()) {
+            rs.next();
+            return rs.getLong(1);
+        }
+    }
+
+    private static List<Registro> registros(long depoisDe, String acao) throws Exception {
+        try (Connection c = conexaoDono();
+             PreparedStatement ps = c.prepareStatement("SELECT usuario_id, unidade_id, recurso, recurso_id, dados::text "
+                     + "FROM auditoria.registro WHERE id > ? AND acao = ? ORDER BY id")) {
+            ps.setLong(1, depoisDe);
+            ps.setString(2, acao);
+            List<Registro> r = new ArrayList<>();
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    r.add(new Registro(rs.getObject(1, UUID.class), rs.getObject(2, UUID.class), rs.getString(3),
+                            rs.getString(4), rs.getString(5)));
+                }
+            }
+            return r;
+        }
+    }
+
+    /** Episódios do conjunto referenciado (já conferindo que o hash gravado corresponde à lista). */
+    private static List<String> conjunto(UUID unidade, String hashHex) throws Exception {
+        try (Connection c = conexaoDono();
+             PreparedStatement ps = c.prepareStatement("SELECT array_to_string(episodios, ','), "
+                     + "hash = public.digest(convert_to(array_to_string(episodios, ','), 'UTF8'), 'sha256') "
+                     + "FROM auditoria.conjunto_consultado WHERE unidade_id = ? AND hash = decode(?, 'hex')")) {
+            ps.setObject(1, unidade);
+            ps.setString(2, hashHex);
+            try (ResultSet rs = ps.executeQuery()) {
+                assertTrue(rs.next(), "conjunto referenciado existe na unidade");
+                assertTrue(rs.getBoolean(2), "hash confere com a lista");
+                String s = rs.getString(1);
+                return s.isEmpty() ? List.of() : List.of(s.split(","));
+            }
+        }
+    }
+
+    private static void semNominal(String dados, String... episodios) {
+        for (String proibido : List.of("Paciente Ficticio", "Auditoria", "sigilosa", "Observacao A")) {
+            assertFalse(dados.contains(proibido), "dados da auditoria sem nomes/descrições: " + proibido);
+        }
+        for (String ep : episodios) {
+            assertFalse(dados.contains(ep), "a lista de episódios fica no conjunto, não no evento");
+        }
+    }
+
+    private static List<String> sorted(String... ids) {
+        return java.util.Arrays.stream(ids).sorted().toList();
+    }
+
+    private int versaoEpisodio(ClienteHttp c, String ep) throws Exception {
+        return json.readTree(exigir(200, c.enviar("GET", "/api/episodios/" + ep, null)).body())
+                .get("resumo").get("versao").asInt();
+    }
+
+    private static UUID idCatalogo(String tabela, UUID unidade, String codigo) throws Exception {
+        if (!tabela.equals("fluxo.etapa") && !tabela.equals("fluxo.motivo_bloqueio")) {
+            throw new IllegalArgumentException(tabela);
+        }
+        try (Connection c = conexaoDono();
+             PreparedStatement ps = c.prepareStatement("SELECT id FROM " + tabela + " WHERE unidade_id = ? AND codigo = ?")) {
+            ps.setObject(1, unidade);
+            ps.setString(2, codigo);
+            try (ResultSet rs = ps.executeQuery()) {
+                assertTrue(rs.next(), codigo);
+                return rs.getObject(1, UUID.class);
+            }
+        }
+    }
+
+    private static UUID idUsuario(String login) throws Exception {
+        try (Connection c = conexaoDono();
+             PreparedStatement ps = c.prepareStatement("SELECT id FROM fluxo.usuario WHERE login = ?")) {
+            ps.setString(1, login);
+            try (ResultSet rs = ps.executeQuery()) {
+                assertTrue(rs.next(), login);
+                return rs.getObject(1, UUID.class);
+            }
+        }
+    }
 
     private String abrir(ClienteHttp c, String nome, UUID setor) throws Exception {
         return texto(json.readTree(exigir(201, c.enviar("POST", "/api/episodios",

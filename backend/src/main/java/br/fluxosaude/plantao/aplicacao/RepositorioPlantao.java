@@ -8,6 +8,7 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 /**
@@ -25,8 +26,34 @@ public interface RepositorioPlantao {
                     String canceladaPorNome, Instant canceladaEm, String justificativaCancelamento, int versao) {
     }
 
-    /** Nomes e descrições lidos do estado ATUAL (não ficam gravados na passagem). */
-    record Nomes(Map<UUID, String> pacientes, Map<UUID, String> pendencias) {
+    /**
+     * Nomes, descrições e rótulos lidos do estado ATUAL, numa única consulta (não ficam gravados na
+     * passagem). Os rótulos de setor, etapa, motivo e profissional vêm do servidor para que valores
+     * novos, inativados ou ainda fora do catálogo carregado pela tela apareçam corretamente.
+     */
+    record Nomes(Map<UUID, String> pacientes, Map<UUID, String> pendencias, Map<UUID, String> setores,
+                 Map<UUID, String> etapas, Map<UUID, String> motivos, Map<UUID, String> profissionais) {
+        public Nomes {
+            pacientes = Map.copyOf(pacientes);
+            pendencias = Map.copyOf(pendencias);
+            setores = Map.copyOf(setores);
+            etapas = Map.copyOf(etapas);
+            motivos = Map.copyOf(motivos);
+            profissionais = Map.copyOf(profissionais);
+        }
+    }
+
+    /** Identificadores cujos nomes/rótulos serão exibidos. */
+    record Referencias(Set<UUID> episodios, Set<UUID> pendencias, Set<UUID> setores, Set<UUID> etapas,
+                       Set<UUID> motivos, Set<UUID> profissionais) {
+        public Referencias {
+            episodios = Set.copyOf(episodios);
+            pendencias = Set.copyOf(pendencias);
+            setores = Set.copyOf(setores);
+            etapas = Set.copyOf(etapas);
+            motivos = Set.copyOf(motivos);
+            profissionais = Set.copyOf(profissionais);
+        }
     }
 
     /** Todos os episódios abertos da unidade (até {@code limite}), numa única consulta. */
@@ -53,8 +80,18 @@ public interface RepositorioPlantao {
     /** UPDATE versionado (ENTREGUE → CANCELADA); versão divergente → ConflitoDeVersaoException. */
     void cancelar(UUID id, int versaoLida, String justificativa);
 
-    Nomes nomes(Collection<UUID> episodios, Collection<UUID> pendencias);
+    Nomes nomes(Referencias referencias);
 
     /** Auditoria semântica (sem texto livre). */
     void auditar(String acao, UUID passagemId, Map<String, Object> dados);
+
+    /**
+     * Registra uma LEITURA nominal (RNF-002, ADR-0003): ator, unidade e instante vêm do contexto do
+     * banco; {@code episodios} são as referências exibidas além das já registradas na própria
+     * passagem (conjunto gravado uma vez por conteúdo, endereçado pelo seu hash); {@code dados}
+     * só com valores escalares do código (sem nomes nem descrições).
+     *
+     * @param passagemId nulo na prévia (o conteúdo ainda não existe como registro)
+     */
+    void auditarConsulta(String acao, UUID passagemId, Collection<UUID> episodios, Map<String, Object> dados);
 }

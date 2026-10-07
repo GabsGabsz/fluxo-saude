@@ -10,6 +10,7 @@ import br.fluxosaude.identidade.dominio.Permissao;
 import br.fluxosaude.identidade.dominio.UsuarioAutenticado;
 import br.fluxosaude.plantao.dominio.Assinatura;
 import br.fluxosaude.plantao.dominio.CasoAtual;
+import br.fluxosaude.plantao.dominio.Comparacao;
 import br.fluxosaude.plantao.dominio.ComposicaoPassagem;
 import br.fluxosaude.plantao.dominio.ConteudoPassagem;
 import br.fluxosaude.plantao.dominio.Diferencas;
@@ -42,6 +43,9 @@ public final class ServicoPlantao {
     /** Limite técnico: acima dele a passagem NÃO é gerada (nunca uma passagem parcial). */
     public static final int LIMITE_CASOS = 2000;
     public static final int LIMITE_HISTORICO = 30;
+    /** Leituras nominais registradas (RNF-002): prévia (todos os abertos) e detalhe de uma passagem. */
+    public static final String CONSULTA_PREVIA = "CONSULTA_PREVIA_PASSAGEM";
+    public static final String CONSULTA_PASSAGEM = "CONSULTA_PASSAGEM";
 
     public record Previa(Instant agora, ConteudoPassagem conteudo, String assinatura, Instant periodoInicio,
                          RepositorioPlantao.Passagem pendente, RepositorioPlantao.Nomes nomes) {
@@ -49,12 +53,17 @@ public final class ServicoPlantao {
 
     /**
      * @param integra       o conteúdo gravado confere com a assinatura gravada
-     * @param diferencas    só para passagem ENTREGUE (aguardando recebimento): mudanças desde a entrega
-     * @param assinaturaRecebimento o que o recebedor deve devolver para confirmar
+     * @param comparacao    só para passagem ENTREGUE (aguardando recebimento): cada mudança desde a
+     *                      entrega, com o valor entregue e o valor ATUAL (o que a tela exibe)
+     * @param assinaturaRecebimento o que o recebedor deve devolver para confirmar: cobre o conteúdo
+     *                      entregue, as diferenças e o conteúdo atual (= entregue + mudanças exibidas)
      */
     public record Detalhe(Instant agora, RepositorioPlantao.Passagem passagem, ConteudoPassagem conteudo, boolean integra,
-                          Diferencas diferencas, String assinaturaRecebimento, ConteudoPassagem atual,
+                          Comparacao comparacao, String assinaturaRecebimento, ConteudoPassagem atual,
                           RepositorioPlantao.Nomes nomes) {
+        public Diferencas diferencas() {
+            return comparacao == null ? null : comparacao.diferencas();
+        }
     }
 
     private final TransacaoPlantao transacao;
@@ -72,8 +81,15 @@ public final class ServicoPlantao {
         return transacao.executar(u, origem, r -> {
             Instant agora = relogio.instant();
             ConteudoPassagem conteudo = compor(r, agora);
-            return new Previa(agora, conteudo, conteudo.assinatura(), r.ultimaRecebidaEm().orElse(null),
+            Previa previa = new Previa(agora, conteudo, conteudo.assinatura(), r.ultimaRecebidaEm().orElse(null),
                     r.pendente().orElse(null), nomes(r, List.of(conteudo)));
+            // Leitura nominal (todos os casos abertos): registrada na mesma transação; se o registro
+            // falhar, nada é devolvido (falha fechada, como nas consultas de caso e paciente).
+            Map<String, Object> dados = new LinkedHashMap<>();
+            dados.put("assinatura", conteudo.assinatura());
+            dados.put("casos", conteudo.totalCasos());
+            r.auditarConsulta(CONSULTA_PREVIA, null, episodios(conteudo), dados);
+            return previa;
         });
     }
 
@@ -107,13 +123,25 @@ public final class ServicoPlantao {
             RepositorioPlantao.Passagem p = r.passagem(id).orElseThrow(() -> new RecursoNaoEncontradoException("Passagem"));
             ConteudoPassagem entregue = r.conteudo(id).orElseThrow(() -> new RecursoNaoEncontradoException("Passagem"));
             boolean integra = entregue.assinatura().equals(p.assinatura());
+            Map<String, Object> dados = new LinkedHashMap<>();
+            dados.put("status", p.status());
             if (!"ENTREGUE".equals(p.status())) {
-                return new Detalhe(agora, p, entregue, integra, null, null, null, nomes(r, List.of(entregue)));
+                // Exibe só o conteúdo entregue: a referência é a própria passagem (conteúdo imutável).
+                Detalhe d = new Detalhe(agora, p, entregue, integra, null, null, null, nomes(r, List.of(entregue)));
+                r.auditarConsulta(CONSULTA_PASSAGEM, id, Set.of(), dados);
+                return d;
             }
             ConteudoPassagem atual = compor(r, agora);
-            Diferencas d = Diferencas.entre(entregue, atual);
-            return new Detalhe(agora, p, entregue, integra, d, d.assinaturaRecebimento(p.assinatura(), atual.assinatura()), atual,
+            Comparacao c = Comparacao.entre(entregue, atual);
+            Detalhe d = new Detalhe(agora, p, entregue, integra, c,
+                    c.diferencas().assinaturaRecebimento(p.assinatura(), atual.assinatura()), atual,
                     nomes(r, List.of(entregue, atual)));
+            // Casos do conteúdo entregue já são referenciados pela passagem; registra só os exibidos além dele.
+            Set<UUID> alem = new HashSet<>(episodios(atual));
+            alem.removeAll(episodios(entregue));
+            dados.put("assinaturaAtual", atual.assinatura());
+            r.auditarConsulta(CONSULTA_PASSAGEM, id, alem, dados);
+            return d;
         });
     }
 
@@ -186,13 +214,36 @@ public final class ServicoPlantao {
     private static RepositorioPlantao.Nomes nomes(RepositorioPlantao r, List<ConteudoPassagem> conteudos) {
         Set<UUID> eps = new HashSet<>();
         Set<UUID> pends = new HashSet<>();
+        Set<UUID> setores = new HashSet<>();
+        Set<UUID> etapas = new HashSet<>();
+        Set<UUID> motivos = new HashSet<>();
+        Set<UUID> profissionais = new HashSet<>();
         for (ConteudoPassagem c : conteudos) {
             c.casos().forEach(caso -> {
                 eps.add(caso.episodioId());
-                caso.pendencias().forEach(p -> pends.add(p.id()));
+                setores.add(caso.setorId());
+                etapas.add(caso.etapaId());
+                if (caso.motivoId() != null) {
+                    motivos.add(caso.motivoId());
+                }
+                caso.pendencias().forEach(p -> {
+                    pends.add(p.id());
+                    if (p.responsavelSetorId() != null) {
+                        setores.add(p.responsavelSetorId());
+                    }
+                    if (p.responsavelUsuarioId() != null) {
+                        profissionais.add(p.responsavelUsuarioId());
+                    }
+                });
             });
         }
-        return r.nomes(eps, pends);
+        return r.nomes(new RepositorioPlantao.Referencias(eps, pends, setores, etapas, motivos, profissionais));
+    }
+
+    private static Set<UUID> episodios(ConteudoPassagem c) {
+        Set<UUID> s = new HashSet<>();
+        c.casos().forEach(caso -> s.add(caso.episodioId()));
+        return s;
     }
 
     private static Map<String, Object> totais(ConteudoPassagem c) {

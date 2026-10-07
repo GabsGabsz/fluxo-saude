@@ -34,11 +34,20 @@ export function montar(raiz, ctx, { id }) {
   let regras = new Map();
   let observacaoDigitada = ''; // sobrevive a "Recarregar dados": o texto digitado não se perde
 
+  // Rótulos vêm do servidor (estado atual do cadastro, mesma leitura do conteúdo); o catálogo da
+  // tela é só reserva (pode não ter itens criados ou inativados depois do login).
   function responsavel(p) {
-    if (p.responsavelUsuarioId) return nomes.usuario(p.responsavelUsuarioId);
-    if (p.responsavelSetorId) return `Setor: ${nomes.setor(p.responsavelSetorId)}`;
+    if (p.responsavelUsuarioId) return p.responsavelNome || nomes.usuario(p.responsavelUsuarioId);
+    if (p.responsavelSetorId) return `Setor: ${p.responsavelNome || nomes.setor(p.responsavelSetorId)}`;
     if (p.responsavelPapel) return `Perfil: ${rotulos.papel(p.responsavelPapel)}`;
     return '—';
+  }
+  const etapaDe = (c) => c.etapaNome || nomes.etapa(c.etapaId);
+  const setorDe = (c) => c.setorNome || nomes.setor(c.setorId);
+  const motivoDe = (c) => (c.motivoId ? c.motivoDescricao || nomes.motivo(c.motivoId) : null);
+  function bloqueioTexto(c) {
+    if (!c.bloqueioDesde) return 'Sem bloqueio';
+    return [rotulos.categoria(c.categoria), motivoDe(c) ? ` — ${motivoDe(c)}` : '', ' (desde ', dataHora(c.bloqueioDesde, fuso), ')'];
   }
 
   async function carregar() {
@@ -66,14 +75,16 @@ export function montar(raiz, ctx, { id }) {
   }
 
   // ------------------------------------------------------------ conteúdo (seções da ERS §10.4)
-  function linhaCaso(c, agora) {
-    const motivo = c.motivoId ? nomes.motivo(c.motivoId) : null;
+  function linhaCaso(c, agora, mudados = new Set()) {
+    const mudou = mudados.has(c.episodioId);
+    const motivo = motivoDe(c);
     return h('li', { class: 'cartao', 'data-caso': c.episodioId },
       h('p', {}, h('a', { href: `#/episodio/${c.episodioId}` }, c.pacienteNome || 'Paciente'), ' ',
         c.critico ? etiqueta('alerta', 'Crítico (operacional)') : null,
-        c.transferencia ? etiqueta('neutro', 'Transferência') : null),
+        c.transferencia ? etiqueta('neutro', 'Transferência') : null,
+        mudou ? [' ', etiqueta('ciente', 'Mudou depois da entrega — veja a situação atual')] : null),
       h('dl', { class: 'dados' },
-        h('dt', {}, 'Setor / etapa'), h('dd', {}, `${nomes.setor(c.setorId)} · ${nomes.etapa(c.etapaId)}`),
+        h('dt', {}, 'Setor / etapa'), h('dd', {}, `${setorDe(c)} · ${etapaDe(c)}`),
         h('dt', {}, 'Na unidade há'), h('dd', {}, cronometro(c.entradaEm, agora)),
         h('dt', {}, 'Bloqueio'), h('dd', {}, c.bloqueioDesde
           ? [etiqueta('bloqueio', rotulos.categoria(c.categoria)), ' ', motivo || '', ' há ', cronometro(c.bloqueioDesde, agora)]
@@ -84,17 +95,22 @@ export function montar(raiz, ctx, { id }) {
             return h('li', {}, r ? r.nome : rotulos.tipoRegra(a.tipo),
               r && r.acaoEsperada ? ` — ação esperada: ${r.acaoEsperada}` : '');
           })))] : null),
-      c.pendencias.length ? h('ul', { class: 'lista-compacta' }, c.pendencias.map((p) => linhaPendencia(p))) : null);
+      c.pendencias.length ? h('ul', { class: 'lista-compacta' }, c.pendencias.map((p) => linhaPendencia(p, mudados.has(p.id)))) : null);
   }
 
-  function linhaPendencia(p) {
+  function linhaPendencia(p, mudou = false) {
     return h('li', { 'data-pendencia': p.id },
       p.vencida ? etiqueta('alerta', 'Vencida') : etiqueta('neutro', 'No prazo'), ' ',
       h('strong', {}, p.descricao || 'Pendência'), ` — responsável: ${responsavel(p)} — prazo: `, dataHora(p.prazo, fuso),
-      ` — criticidade operacional ${rotulos.criticidade(p.criticidade).toLowerCase()}`);
+      ` — criticidade operacional ${rotulos.criticidade(p.criticidade).toLowerCase()}`,
+      mudou ? [' ', etiqueta('ciente', 'Mudou depois da entrega — veja a situação atual')] : null);
   }
 
-  function secoes(casos, agora) {
+  /**
+   * Seções da ERS §10.4. {@code mudados}: ids de casos/pendências que mudaram desde a entrega (no
+   * detalhe, o conteúdo exibido aqui é o ENTREGUE; a situação atual fica na seção de recebimento).
+   */
+  function secoes(casos, agora, { nivel = 'h2', mudados = new Set() } = {}) {
     const pendencias = casos.flatMap((c) => c.pendencias.map((p) => ({ ...p, paciente: c.pacienteNome })));
     const vencidas = pendencias.filter((p) => p.vencida);
     const acoes = pendencias.filter((p) => !p.vencida);
@@ -102,15 +118,17 @@ export function montar(raiz, ctx, { id }) {
     const transferencias = casos.filter((c) => c.transferencia);
     const demais = casos.filter((c) => !c.critico && !c.transferencia);
     const secao = (tituloSecao, itens, vazio, desenhar) => h('section', { class: 'cartao', 'aria-label': tituloSecao },
-      h('h2', {}, `${tituloSecao} (${itens.length})`),
+      h(nivel, {}, `${tituloSecao} (${itens.length})`),
       itens.length ? h('ul', { class: 'lista-travados' }, itens.map(desenhar)) : h('p', { class: 'vazio' }, vazio));
-    const pend = (p) => h('li', {}, h('span', { class: 'discreto' }, `${p.paciente || 'Paciente'}: `), linhaPendencia(p));
+    const caso = (c) => linhaCaso(c, agora, mudados);
+    const pend = (p) => h('li', {}, h('span', { class: 'discreto' }, `${p.paciente || 'Paciente'}: `),
+      linhaPendencia(p, mudados.has(p.id)));
     return [
-      secao('Casos críticos', criticos, 'Nenhum caso crítico (alerta operacional ou pendência crítica).', (c) => linhaCaso(c, agora)),
-      secao('Transferências', transferencias, 'Nenhuma transferência em andamento.', (c) => linhaCaso(c, agora)),
+      secao('Casos críticos', criticos, 'Nenhum caso crítico (alerta operacional ou pendência crítica).', caso),
+      secao('Transferências', transferencias, 'Nenhuma transferência em andamento.', caso),
       secao('Pendências vencidas', vencidas, 'Nenhuma pendência vencida.', pend),
       secao('Ações esperadas (pendências no prazo)', acoes, 'Nenhuma pendência aberta no prazo.', pend),
-      secao('Demais casos ativos', demais, 'Nenhum outro caso ativo.', (c) => linhaCaso(c, agora)),
+      secao('Demais casos ativos', demais, 'Nenhum outro caso ativo.', caso),
     ];
   }
 
@@ -203,12 +221,26 @@ export function montar(raiz, ctx, { id }) {
         p.diferencasRecebimento ? [h('dt', {}, 'Diferenças vistas no recebimento'), h('dd', {}, contagens(p.diferencasRecebimento))] : null,
         p.canceladaPorNome ? [h('dt', {}, 'Cancelada por'), h('dd', {}, p.canceladaPorNome, ' em ', dataHora(p.canceladaEm, fuso),
           ' — ', p.justificativaCancelamento || '')] : null),
-      h('p', { class: 'discreto' }, 'Conteúdo abaixo = o que foi ENTREGUE (registrado na entrega). Nomes e descrições são lidos do cadastro atual.'),
       totais(d.totais)));
+    const mudados = new Set();
     if (p.status === 'ENTREGUE') {
-      blocos.push(p.entreguePor === eu ? cancelamento(p) : recebimento(d));
+      if (p.entreguePor === eu) {
+        blocos.push(cancelamento(p));
+      } else {
+        blocos.push(recebimento(d));
+        const dif = d.diferencas;
+        [...dif.casosAlterados, ...dif.casosEncerrados].forEach((x) => mudados.add(x.episodioId));
+        [...dif.pendenciasAlteradas, ...dif.pendenciasEncerradas].forEach((x) => mudados.add(x.id));
+      }
     }
-    blocos.push(...secoes(d.casos, agora));
+    // Conteúdo ENTREGUE, separado e rotulado como tal (não é a situação atual).
+    blocos.push(h('section', { class: 'cartao', 'aria-label': 'Conteúdo entregue' },
+      h('h2', {}, 'Conteúdo entregue'),
+      h('p', {}, 'Como estava na entrega, em ', dataHora(p.entregueEm, fuso),
+        '. Registro imutável: só identificadores e marcações; nomes e descrições vêm do cadastro atual.'),
+      mudados.size ? mensagem('aviso', `${mudados.size} item(ns) abaixo mudaram depois da entrega: os valores atuais estão em "Situação atual".`)
+        : null,
+      ...secoes(d.casos, agora, { nivel: 'h3', mudados })));
     substituir(corpo, blocos);
   }
 
@@ -223,19 +255,66 @@ export function montar(raiz, ctx, { id }) {
     return r.length ? r.join(' · ') : 'nenhuma';
   }
 
+  // ------------------------------------------------------------ situação atual (entregue × agora)
+  const linkCaso = (x) => h('a', { href: `#/episodio/${x.episodioId}` }, x.pacienteNome || 'Paciente');
+  const campos = (lista, rotulo) => h('span', { class: 'discreto' }, ` — mudou: ${lista.map(rotulo).join(', ')}`);
+
+  /** Tabela "Na entrega" × "Agora" só com os campos que mudaram. */
+  function antesDepois(linhas) {
+    return h('div', { class: 'rolagem' }, h('table', { class: 'responsiva antes-depois' },
+      h('thead', {}, h('tr', {}, ['Campo', 'Na entrega', 'Agora'].map((t) => h('th', { scope: 'col' }, t)))),
+      h('tbody', {}, linhas.map(([campo, antes, agora]) => h('tr', {},
+        h('th', { scope: 'row', 'data-rotulo': 'Campo' }, campo),
+        h('td', { 'data-rotulo': 'Na entrega' }, antes),
+        h('td', { 'data-rotulo': 'Agora' }, agora))))));
+  }
+
+  function casoAlterado(x) {
+    const a = x.entregue;
+    const b = x.atual;
+    const linhas = [];
+    for (const campo of x.campos) {
+      if (campo === 'ETAPA') linhas.push(['Etapa', [etapaDe(a), ' desde ', dataHora(a.etapaDesde, fuso)], [etapaDe(b), ' desde ', dataHora(b.etapaDesde, fuso)]]);
+      else if (campo === 'SETOR') linhas.push(['Setor', setorDe(a), setorDe(b)]);
+      else if (campo === 'MOTIVO_BLOQUEIO') linhas.push(['Bloqueio/motivo', bloqueioTexto(a), bloqueioTexto(b)]);
+      else if (campo === 'CRITICO') linhas.push(['Crítico (operacional)', a.critico ? 'Sim' : 'Não', b.critico ? 'Sim' : 'Não']);
+      else if (campo === 'TRANSFERENCIA') linhas.push(['Transferência', a.transferencia ? 'Sim' : 'Não', b.transferencia ? 'Sim' : 'Não']);
+      else if (campo === 'ALERTAS') linhas.push(['Alertas operacionais', String(a.alertas.length), String(b.alertas.length)]);
+      else if (campo === 'ENTRADA') linhas.push(['Entrada', dataHora(a.entradaEm, fuso), dataHora(b.entradaEm, fuso)]);
+    }
+    return h('li', { class: 'cartao', 'data-caso': x.episodioId },
+      h('p', {}, linkCaso(x), campos(x.campos, rotulos.campoCaso)),
+      linhas.length ? antesDepois(linhas) : null,
+      x.campos.includes('OUTRO_REGISTRO')
+        ? h('p', { class: 'discreto' }, 'Houve outro registro no caso (ex.: observação ou protocolo). Abra o caso para ver.') : null);
+  }
+
+  function pendenciaAlterada(x) {
+    const a = x.entregue;
+    const b = x.atual;
+    const linhas = [];
+    for (const campo of x.campos) {
+      if (campo === 'RESPONSAVEL') linhas.push(['Responsável', responsavel(a), responsavel(b)]);
+      else if (campo === 'PRAZO') linhas.push(['Prazo', dataHora(a.prazo, fuso), dataHora(b.prazo, fuso)]);
+      else if (campo === 'VENCIMENTO') linhas.push(['Situação do prazo', a.vencida ? 'Vencida' : 'No prazo', b.vencida ? 'Vencida' : 'No prazo']);
+      else if (campo === 'CRITICIDADE') linhas.push(['Criticidade operacional', rotulos.criticidade(a.criticidade), rotulos.criticidade(b.criticidade)]);
+      else if (campo === 'CATEGORIA') linhas.push(['Categoria', rotulos.categoria(a.categoria), rotulos.categoria(b.categoria)]);
+    }
+    return h('li', { class: 'cartao', 'data-pendencia': x.id },
+      h('p', {}, h('strong', {}, x.descricao || 'Pendência'), ' — caso: ', linkCaso(x), campos(x.campos, rotulos.campoPendencia)),
+      linhas.length ? antesDepois(linhas) : null,
+      x.campos.includes('OUTRO_REGISTRO') ? h('p', { class: 'discreto' }, 'Houve outro registro na pendência. Abra o caso para ver.') : null);
+  }
+
   function recebimento(d) {
     const dif = d.diferencas;
-    const casoPorId = new Map(d.casos.map((c) => [c.episodioId, c]));
-    const pendPorId = new Map(d.casos.flatMap((c) => c.pendencias.map((p) => [p.id, { ...p, paciente: c.pacienteNome }])));
-    const nomeCaso = (x) => (casoPorId.get(x) || {}).pacienteNome || 'caso';
-    const nomePend = (x) => { const p = pendPorId.get(x); return p ? `${p.descricao || 'pendência'} (${p.paciente || ''})` : 'pendência'; };
     const vazio = Object.values(dif.contagens).every((n) => n === 0);
     const lista = (rotulo, itens, desenhar) => (itens.length
-      ? [h('h3', {}, `${rotulo} (${itens.length})`), h('ul', { class: 'lista-compacta' }, itens.map(desenhar))] : null);
+      ? [h('h3', {}, `${rotulo} (${itens.length})`), h('ul', { class: 'lista-travados' }, itens.map(desenhar))] : null);
     const form = criarFormulario({
       rotulo: 'Confirmar recebimento',
       rotuloAcessivel: 'Confirmar recebimento',
-      campos: [h('p', {}, 'Ao confirmar, você declara ter recebido o conteúdo entregue e as diferenças listadas acima.')],
+      campos: [h('p', {}, 'Ao confirmar, você declara ter recebido o conteúdo entregue e a situação atual exibida nesta seção.')],
       recarregar: carregar,
       traduzirErro: (e) => (e instanceof ErroApi && e.codigo === 'RECEBIMENTO_DESATUALIZADO'
         ? 'A situação mudou desde que você abriu a passagem. Nada foi confirmado. Recarregue, confira as diferenças e confirme novamente.'
@@ -248,17 +327,29 @@ export function montar(raiz, ctx, { id }) {
       },
     });
     formularios.push(form);
+    const agora = ctx.agora();
     return h('section', { class: 'cartao', 'aria-label': 'Recebimento' },
-      h('h2', {}, 'Diferenças desde a entrega'),
+      h('h2', {}, 'Situação atual'),
+      h('p', {}, 'Lida em ', dataHora(d.agora, fuso), ' (horário do servidor). ',
+        d.totaisAtuais ? `Agora: ${d.totaisAtuais.casos} caso(s) ativo(s), ${d.totaisAtuais.pendencias} pendência(s) aberta(s), `
+          + `${d.totaisAtuais.vencidas} vencida(s). ` : '',
+        'Tudo o que não aparece abaixo está igual ao conteúdo entregue.'),
       vazio ? mensagem('info', 'Nenhuma diferença entre o conteúdo entregue e a situação atual.') : [
         mensagem('aviso', `Mudanças desde a entrega: ${contagens(dif.contagens)}.`),
-        lista('Casos encerrados', dif.casosEncerrados, (x) => h('li', {}, nomeCaso(x))),
-        lista('Casos novos', dif.casosNovos, (c) => linhaCaso(c, ctx.agora())),
-        lista('Casos alterados', dif.casosAlterados, (x) => h('li', {}, h('a', { href: `#/episodio/${x}` }, nomeCaso(x)))),
-        lista('Pendências encerradas', dif.pendenciasEncerradas, (x) => h('li', {}, nomePend(x))),
-        lista('Pendências novas', dif.pendenciasNovas, (p) => linhaPendencia(p)),
-        lista('Pendências alteradas (responsável, prazo ou vencimento)', dif.pendenciasAlteradas, (x) => h('li', {}, nomePend(x))),
+        lista('Casos alterados', dif.casosAlterados, casoAlterado),
+        lista('Pendências alteradas', dif.pendenciasAlteradas, pendenciaAlterada),
+        lista('Casos novos', dif.casosNovos, (x) => linhaCaso(x.atual, agora)),
+        lista('Pendências novas', dif.pendenciasNovas, (x) => h('li', { class: 'cartao' },
+          h('p', {}, 'Caso: ', linkCaso(x)), h('ul', { class: 'lista-compacta' }, linhaPendencia({ ...x.atual, descricao: x.descricao })))),
+        lista('Casos encerrados (não estão mais abertos)', dif.casosEncerrados, (x) => h('li', { class: 'cartao', 'data-caso': x.episodioId },
+          h('p', {}, linkCaso(x)), h('p', { class: 'discreto' }, `Na entrega: ${setorDe(x.entregue)} · ${etapaDe(x.entregue)}`))),
+        lista('Pendências encerradas (resolvidas, canceladas ou do caso encerrado)', dif.pendenciasEncerradas,
+          (x) => h('li', { class: 'cartao', 'data-pendencia': x.id },
+            h('p', {}, h('strong', {}, x.descricao || 'Pendência'), ' — caso: ', linkCaso(x)),
+            h('p', { class: 'discreto' }, `Na entrega: responsável ${responsavel(x.entregue)}, prazo `, dataHora(x.entregue.prazo, fuso)))),
       ],
+      h('p', { class: 'discreto' }, 'A confirmação vale para o conteúdo entregue e para esta situação atual. Se algo mudar antes '
+        + 'do clique, nada é confirmado e será preciso recarregar e conferir de novo.'),
       form.el);
   }
 
