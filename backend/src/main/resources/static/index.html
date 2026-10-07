@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Fluxo Saúde</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/app/css/app.css">
+  <!-- Sem scripts ou estilos inline (CSP: default-src 'self'). Nenhum dado é embutido nesta página:
+       tudo vem de /api/**, que exige sessão. -->
+  <script type="module" src="/app/js/main.js"></script>
+</head>
+<body>
+  <button type="button" class="pular" id="pular">Pular para o conteúdo</button>
+  <header id="topo" class="topo" hidden></header>
+  <div id="faixa-desatualizado" class="faixa faixa-aviso" role="status" hidden></div>
+  <main id="conteudo" tabindex="-1">
+    <p class="carregando" role="status">Carregando…</p>
+    <noscript><p class="mensagem mensagem-erro">O Fluxo Saúde precisa de JavaScript habilitado.</p></noscript>
+  </main>
+  <div id="anuncio" class="so-leitor" aria-live="polite" aria-atomic="true"></div>
+</body>
+</html>
