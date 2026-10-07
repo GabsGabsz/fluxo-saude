@@ -299,6 +299,41 @@ class ServicosDeAplicacaoTest {
         }
 
         @Test
+        @DisplayName("Catálogo: qualquer perfil da unidade; nomes de profissionais só para quem atua nos casos")
+        void catalogo() {
+            consultas.catalogo(usuario(Papel.ENFERMAGEM), ORIGEM);
+            assertTrue(repo.ultimoCatalogoComProfissionais);
+            var direcao = consultas.catalogo(usuario(Papel.DIRECAO), ORIGEM);
+            assertFalse(repo.ultimoCatalogoComProfissionais);
+            assertTrue(direcao.profissionais().isEmpty());
+            consultas.catalogo(usuario(Papel.ADMINISTRADOR), ORIGEM);
+            assertTrue(repo.ultimoCatalogoComProfissionais, "administrador gere usuários");
+            UsuarioAutenticado pendente = new UsuarioAutenticado(UUID.randomUUID(), "u.p", "Pendente",
+                    Map.of(FluxoDeTeste.UNIDADE, Set.of(Papel.ENFERMAGEM)), FluxoDeTeste.UNIDADE, true, 1);
+            assertThrows(AcessoNegadoException.class, () -> consultas.catalogo(pendente, ORIGEM),
+                    "troca de senha pendente");
+        }
+
+        @Test
+        @DisplayName("Busca de paciente: exata por CNS OU identificador, exige abrir episódio e é auditada")
+        void buscaDePaciente() {
+            UsuarioAutenticado enf = usuario(Papel.ENFERMAGEM);
+            UUID achado = UUID.randomUUID();
+            repo.pacientesEncontrados = List.of(new Consultas.PacienteEncontrado(achado, "Maria", null, false, null, false));
+            assertEquals(1, consultas.pacientes(enf, ORIGEM, " 291 4177 7631 7066 ", null).size());
+            assertEquals("cns:291417776317066", repo.ultimaBuscaPaciente);
+            assertTrue(repo.consultasRegistradas.contains(achado), "consulta nominal auditada");
+            consultas.pacientes(enf, ORIGEM, null, " PR-12 ");
+            assertEquals("id:PR-12", repo.ultimaBuscaPaciente);
+            assertEquals("BUSCA_INVALIDA", erro(() -> consultas.pacientes(enf, ORIGEM, null, null)));
+            assertEquals("BUSCA_INVALIDA", erro(() -> consultas.pacientes(enf, ORIGEM, "291417776317066", "PR-1")));
+            assertEquals("CNS_INVALIDO", erro(() -> consultas.pacientes(enf, ORIGEM, "123", null)));
+            assertThrows(AcessoNegadoException.class, () -> consultas.pacientes(usuario(Papel.DIRECAO), ORIGEM, null, "PR-1"));
+            assertThrows(AcessoNegadoException.class, () -> consultas.pacientes(usuario(Papel.MEDICO), ORIGEM, null, "PR-1"),
+                    "médico não abre episódio");
+        }
+
+        @Test
         void filtroNormalizado() {
             consultas.torre(usuario(Papel.ENFERMAGEM), ORIGEM, new Consultas.FiltroTorre(null, null, null, null, null,
                     null, -5, null, null, false, 100_000));

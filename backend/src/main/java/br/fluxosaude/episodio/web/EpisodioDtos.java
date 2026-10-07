@@ -105,11 +105,12 @@ final class EpisodioDtos {
      */
     record AlertaResumo(UUID regraId, int regraVersao, String regraNome,
                         br.fluxosaude.alerta.dominio.TipoRegraAlerta tipo, Instant referenciaEm, Instant atingidoEm,
-                        UUID pendenciaId, boolean ciente) {
+                        UUID pendenciaId, Long limiteMinutos, String acaoEsperada, boolean ciente) {
         static AlertaResumo de(br.fluxosaude.alerta.aplicacao.ServicoAlertas.AlertaVisto v) {
             var a = v.alerta();
             return new AlertaResumo(a.regraId(), a.regraVersao(), a.regraNome(), a.tipo(), a.referenciaEm(),
-                    a.atingidoEm(), a.pendenciaId(), v.ciencia() != null);
+                    a.atingidoEm(), a.pendenciaId(), a.limite() == null ? null : a.limite().toMinutes(),
+                    a.acaoEsperada(), v.ciencia() != null);
         }
     }
 
@@ -129,12 +130,14 @@ final class EpisodioDtos {
                         LocalDate pacienteNascimento, String destinoDescricao, String motivoDetalhe, String desfecho,
                         Instant encerradoEm, String justificativaEncerramento, String justificativaDuplicidade,
                         List<Consultas.LinhaPendencia> pendencias, List<EventoDto> linhaDoTempo,
-                        List<Consultas.Observacao> observacoes, boolean historicoTruncado) {
-        static CasoResponse de(Instant agora, Consultas.Caso c) {
+                        List<Consultas.Observacao> observacoes, boolean historicoTruncado,
+                        List<AlertaResumo> alertas) {
+        static CasoResponse de(Instant agora, Consultas.Caso c, List<AlertaResumo> alertas) {
             return new CasoResponse(agora, c.resumo(), c.pacienteCns(), c.pacienteIdentificador(),
                     c.pacienteNascimento(), c.destinoDescricao(), c.motivoDetalhe(), c.desfecho(), c.encerradoEm(),
                     c.justificativaEncerramento(), c.justificativaDuplicidade(), c.pendencias(),
-                    c.linhaDoTempo().stream().map(EventoDto::de).toList(), c.observacoes(), c.historicoTruncado());
+                    c.linhaDoTempo().stream().map(EventoDto::de).toList(), c.observacoes(), c.historicoTruncado(),
+                    alertas);
         }
     }
 

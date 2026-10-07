@@ -20,6 +20,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.Size;
 import java.net.URI;
 import java.time.Clock;
 import java.util.HashMap;
@@ -43,7 +44,9 @@ import org.springframework.web.bind.annotation.RestController;
  * <pre>
  * GET   /api/episodios                       Torre (filtros e ordenação — RF-010/RF-012)
  * POST  /api/episodios                       abre episódio (RF-002/RF-003)
- * GET   /api/episodios/{id}                  caso completo + linha do tempo (auditado)
+ * GET   /api/episodios/{id}                  caso completo + linha do tempo + alertas (auditado)
+ * GET   /api/catalogo                        setores, etapas/transições, motivos, especialidades, profissionais
+ * GET   /api/pacientes?cns=|identificador=   busca EXATA de cadastro existente (auditada; RF-003)
  * PUT   /api/episodios/{id}/etapa            muda etapa / encerra com desfecho
  * PUT   /api/episodios/{id}/motivo           motivo do bloqueio
  * PUT   /api/episodios/{id}/protocolo        protocolo externo (regulação)
@@ -116,7 +119,27 @@ class EpisodioController {
 
     @GetMapping("/episodios/{id}")
     EpisodioDtos.CasoResponse caso(@PathVariable UUID id, HttpServletRequest req) {
-        return EpisodioDtos.CasoResponse.de(relogio.instant(), consultas.caso(usuario(), origem(req), id));
+        UsuarioAutenticado u = usuario();
+        Consultas.Caso caso = consultas.caso(u, origem(req), id);
+        // Alertas operacionais do caso (só se aberto; calculados no servidor, com regraVersao para a ciência)
+        ServicoAlertas.AlertasDosEpisodios a = alertas.alertasDe(u, origem(req), List.of(id));
+        List<EpisodioDtos.AlertaResumo> doCaso = a.porEpisodio().getOrDefault(id, List.of()).stream()
+                .map(EpisodioDtos.AlertaResumo::de).toList();
+        return EpisodioDtos.CasoResponse.de(a.agora(), caso, doCaso);
+    }
+
+    /** Catálogo da unidade ativa para os formulários (etapas, transições, motivos, setores...). */
+    @GetMapping("/catalogo")
+    Consultas.Catalogo catalogo(HttpServletRequest req) {
+        return consultas.catalogo(usuario(), origem(req));
+    }
+
+    /** RF-003: busca EXATA por CNS ou identificador institucional (auditada). */
+    @GetMapping("/pacientes")
+    List<Consultas.PacienteEncontrado> pacientes(@RequestParam(required = false) @Size(max = 20) String cns,
+                                                 @RequestParam(required = false) @Size(max = 40) String identificador,
+                                                 HttpServletRequest req) {
+        return consultas.pacientes(usuario(), origem(req), cns, identificador);
     }
 
     @GetMapping("/painel")

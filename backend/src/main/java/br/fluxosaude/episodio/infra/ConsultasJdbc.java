@@ -193,6 +193,79 @@ final class ConsultasJdbc implements Consultas {
             .single();
     }
 
+    @Override
+    public Catalogo catalogo(boolean incluirProfissionais) {
+        UnidadeInfo unidade = jdbc.sql("""
+                SELECT id, codigo, nome, fuso_horario FROM fluxo.unidade
+                 WHERE id = ANY (fluxo.ctx_unidades()) ORDER BY id LIMIT 1
+                """)
+            .query((rs, n) -> new UnidadeInfo(uuid(rs, 1), rs.getString(2), rs.getString(3), rs.getString(4)))
+            .single();
+        List<SetorInfo> setores = jdbc.sql("SELECT id, codigo, nome, ativo FROM fluxo.setor ORDER BY nome, id")
+            .query((rs, n) -> new SetorInfo(uuid(rs, 1), rs.getString(2), rs.getString(3), rs.getBoolean(4)))
+            .list();
+        List<EtapaInfo> etapas = jdbc.sql("""
+                SELECT id, codigo, nome, ordem, natureza::text, desfecho::text, inicial, exige_motivo_bloqueio,
+                       exige_protocolo_externo, exige_justificativa, ativa
+                  FROM fluxo.etapa ORDER BY ordem, nome, id
+                """)
+            .query((rs, n) -> new EtapaInfo(uuid(rs, 1), rs.getString(2), rs.getString(3), rs.getInt(4),
+                    rs.getString(5), rs.getString(6), rs.getBoolean(7), rs.getBoolean(8), rs.getBoolean(9),
+                    rs.getBoolean(10), rs.getBoolean(11)))
+            .list();
+        List<TransicaoInfo> transicoes = jdbc.sql("SELECT origem_id, destino_id FROM fluxo.transicao_etapa")
+            .query((rs, n) -> new TransicaoInfo(uuid(rs, 1), uuid(rs, 2)))
+            .list();
+        List<MotivoInfo> motivos = jdbc.sql("""
+                SELECT id, categoria::text, codigo, descricao, exige_detalhe, ativo
+                  FROM fluxo.motivo_bloqueio ORDER BY categoria, descricao, id
+                """)
+            .query((rs, n) -> new MotivoInfo(uuid(rs, 1), rs.getString(2), rs.getString(3), rs.getString(4),
+                    rs.getBoolean(5), rs.getBoolean(6)))
+            .list();
+        List<EspecialidadeInfo> especialidades = jdbc.sql(
+                "SELECT id, codigo, nome FROM fluxo.especialidade WHERE ativa ORDER BY nome, id")
+            .query((rs, n) -> new EspecialidadeInfo(uuid(rs, 1), rs.getString(2), rs.getString(3)))
+            .list();
+        List<Profissional> profissionais = !incluirProfissionais ? List.of() : jdbc.sql("""
+                SELECT DISTINCT u.id, u.nome
+                  FROM fluxo.usuario u
+                  JOIN fluxo.lotacao l ON l.usuario_id = u.id AND l.unidade_id = ANY (fluxo.ctx_unidades())
+                 WHERE u.ativo
+                 ORDER BY u.nome, u.id
+                """)
+            .query((rs, n) -> new Profissional(uuid(rs, 1), rs.getString(2)))
+            .list();
+        return new Catalogo(unidade, setores, etapas, transicoes, motivos, especialidades, profissionais);
+    }
+
+    @Override
+    public List<PacienteEncontrado> pacientes(String cns, String identificador) {
+        return jdbc.sql("""
+                SELECT p.id, p.nome, p.data_nascimento, p.reconciliado_com_id IS NOT NULL, p.reconciliado_com_id,
+                       EXISTS (SELECT 1 FROM fluxo.episodio e WHERE e.paciente_id = p.id AND e.encerrado_em IS NULL)
+                  FROM fluxo.paciente p
+                 WHERE (CAST(:cns AS text) IS NOT NULL AND p.cns = CAST(:cns AS text))
+                    OR (CAST(:ident AS text) IS NOT NULL AND p.identificador_institucional = CAST(:ident AS text))
+                 ORDER BY p.nome, p.id
+                 LIMIT 10
+                """)
+            .param("cns", cns)
+            .param("ident", identificador)
+            .query((rs, n) -> new PacienteEncontrado(uuid(rs, 1), rs.getString(2),
+                    rs.getObject(3, java.time.LocalDate.class), rs.getBoolean(4), uuid(rs, 5), rs.getBoolean(6)))
+            .list();
+    }
+
+    @Override
+    public void registrarConsultaDePaciente(UUID pacienteId, UUID unidadeId) {
+        jdbc.sql("SELECT auditoria.registrar('CONSULTA_PACIENTE', 'fluxo.paciente', :recurso, '{}'::jsonb, CAST(:unidade AS uuid))")
+            .param("recurso", pacienteId.toString())
+            .param("unidade", unidadeId.toString())
+            .query(Long.class)
+            .single();
+    }
+
     private static LinhaTorre linha(ResultSet rs, int n) throws SQLException {
         return new LinhaTorre(uuid(rs, 1), rs.getInt(2), uuid(rs, 3), rs.getString(4), uuid(rs, 5), rs.getString(6),
                 uuid(rs, 7), rs.getString(8), rs.getString(9), rs.getString(10), instante(rs, 11), instante(rs, 12),

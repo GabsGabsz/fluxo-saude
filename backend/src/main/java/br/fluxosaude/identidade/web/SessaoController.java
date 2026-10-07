@@ -44,6 +44,7 @@ import org.springframework.web.bind.annotation.RestController;
  * GET    /api/sessao/csrf     obtém o cookie XSRF-TOKEN (público)
  * POST   /api/sessao          login (público, exige CSRF)
  * GET    /api/sessao          dados da sessão atual
+ * GET    /api/sessao/unidades unidades em que o usuário está lotado (nome e fuso, para a troca)
  * PUT    /api/sessao/unidade  troca a unidade ativa
  * PUT    /api/sessao/senha    troca a senha (obrigatória no primeiro acesso)
  * DELETE /api/sessao          logout
@@ -124,6 +125,17 @@ class SessaoController {
         UsuarioAutenticado usuario = usuarioAtual();
         executor.executar(provedor.contexto(usuario, request), jdbc -> Boolean.TRUE);
         return SessaoDtos.SessaoResponse.de(usuario);
+    }
+
+    /** Unidades do usuário (nome e fuso horário): só as dele, conferidas pelo banco (V15). */
+    @GetMapping("/unidades")
+    java.util.List<SessaoDtos.UnidadeResponse> unidades(HttpServletRequest request) {
+        UsuarioAutenticado usuario = usuarioAtual();
+        return executor.executar(provedor.contexto(usuario, request), jdbc -> jdbc
+                .sql("SELECT id, codigo, nome, fuso_horario FROM fluxo.unidades_do_usuario() ORDER BY nome, id")
+                .query((rs, n) -> new SessaoDtos.UnidadeResponse(rs.getObject(1, java.util.UUID.class), rs.getString(2),
+                        rs.getString(3), rs.getString(4)))
+                .list());
     }
 
     @PutMapping("/unidade")

@@ -49,6 +49,9 @@ class SegurancaConfig {
                 // Despachos internos de erro não passam por "denyAll" (senão 403 viraria 401).
                 .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
                 .requestMatchers("/actuator/health", "/actuator/health/**").permitAll()
+                // Interface web (ADR-0008): só arquivos estáticos, só GET. Não contêm dado algum —
+                // tudo vem de /api/**, que continua exigindo sessão.
+                .requestMatchers(HttpMethod.GET, "/", "/index.html", "/favicon.svg", "/app/**").permitAll()
                 .requestMatchers(HttpMethod.GET, "/api/sessao/csrf").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/sessao").permitAll()
                 .requestMatchers("/api/**").authenticated()
