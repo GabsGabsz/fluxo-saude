@@ -42,8 +42,18 @@ dependências mínima, porque é sistema de saúde.
    - Nada em `localStorage`, `sessionStorage`, IndexedDB, Cache API ou service worker; não há
      modo offline.
    - Uma **geração** muda ao entrar, ao sair, ao trocar de unidade e quando a sessão é revogada.
-     O cliente de API descarta as respostas de gerações anteriores, e a tela anterior é
-     desmontada antes da troca.
+   - Toda operação pertence ao **contexto** (geração + unidade exibida) em que foi iniciada,
+     capturado na entrada de `executar()` e nunca substituído pelo atual:
+     - é conferido de novo **depois de obter o token CSRF** e **imediatamente antes do envio**
+       (sem `await` entre a conferência e o `fetch`); se mudou, a operação **não é enviada**
+       (`RespostaDescartada` com `enviada = false`);
+     - é conferido de novo **depois dos cabeçalhos** e **depois do corpo** da resposta; resposta
+       de contexto anterior é descartada, inclusive 401 e 409, que então **não** acionam os
+       tratadores globais (encerrar sessão, recarregar unidade);
+     - não há exceção genérica; só a obtenção do token CSRF (não traz dado) e a saída
+       (`encerrarSessao()`, vale para qualquer unidade) têm métodos próprios fora dessa regra;
+     - `carregarContexto()` confere a geração e a unidade do catálogo antes de gravar o estado.
+   - A tela anterior é desmontada antes da troca de unidade.
 5. **Unidade esperada conferida no servidor.**
    - A unidade ativa fica na sessão, que é compartilhada entre as abas.
    - A interface envia a unidade que exibe no cabeçalho `X-Fluxo-Unidade`. Se for outra, o
@@ -90,6 +100,8 @@ dependências mínima, porque é sistema de saúde.
 ## Testes
 
 - **Núcleo:** `node --test` sem dependências (`backend/src/test/js`), no job `interface` do CI.
+  `contexto.test.mjs` controla separadamente a espera do token CSRF, a chegada dos cabeçalhos e
+  a conclusão do corpo, com troca de unidade e encerramento de sessão (revisão do PR #8).
 - **E2E** (`e2e/`, Playwright):
   - roda contra o **jar real** e o **PostgreSQL 16 real**, com o bootstrap de produção, o job
     de migração e dados fictícios;

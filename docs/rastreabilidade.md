@@ -42,7 +42,7 @@ Baseline: **ERS v1.1 (revisão técnica)**. Legenda: ✅ implementado e testado 
 | Requisito da etapa | Onde | Teste |
 |---|---|---|
 | Sessão no servidor, CSRF, nada sensível no navegador | `nucleo/api.js`, `nucleo/estado.js` | `nucleo.test.mjs`, E2E `01-sessao` (armazenamento vazio) |
-| Troca de unidade sem mistura; resposta atrasada descartada; outra aba | geração (`estado.js`/`api.js`), `X-Fluxo-Unidade` (`InterceptadorSessao`) | `nucleo.test.mjs`, `CatalogoIT`, E2E `02-unidades`, `07-resiliencia` |
+| Troca de unidade sem mistura; operação de contexto antigo não enviada; resposta (cabeçalhos ou corpo) tardia descartada; outra aba | contexto capturado e reconferido em `api.js`, `X-Fluxo-Unidade` (`InterceptadorSessao`) | `contexto.test.mjs`, `nucleo.test.mjs`, `CatalogoIT`, E2E `02-unidades`, `07-resiliencia` |
 | Versão lida em toda escrita; 409 sem sobrescrita nem reenvio | `nucleo/formulario.js`, `telas/episodio.js` | E2E `04-conflito` |
 | Ciência na `regraVersao` exibida; regra alterada exige nova ação | `telas/travados.js`, `telas/episodio.js` | E2E `05-alertas` |
 | Atualização periódica sem sobreposição, sem escrita, pausada na edição; dados desatualizados sinalizados | `nucleo/atualizador.js` | `nucleo.test.mjs`, E2E `07-resiliencia` |
