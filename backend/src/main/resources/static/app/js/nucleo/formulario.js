@@ -19,6 +19,7 @@ import { mensagemDeErro, ErroApi } from './api.js';
 export function criarFormulario({ rotulo, campos, enviar, recarregar, traduzirErro, classeBotao, rotuloAcessivel }) {
   let enviando = false;
   let sujo = false;
+  let bloqueadoPorConflito = false; // após 409: só "Recarregar dados" (nova leitura) libera nova tentativa
   const situacao = h('div', { class: 'situacao-formulario', 'aria-live': 'polite' });
   const botao = h('button', { type: 'submit', class: classeBotao }, rotulo);
   const form = h('form', { novalidate: true, 'aria-label': rotuloAcessivel, aoEnviar: aoEnviar }, campos,
@@ -48,12 +49,13 @@ export function criarFormulario({ rotulo, campos, enviar, recarregar, traduzirEr
       const especifica = traduzirErro ? traduzirErro(e) : null;
       const texto = especifica || mensagemDeErro(e);
       const conflito = e instanceof ErroApi && e.status === 409 && !e.unidadeAlterada;
+      bloqueadoPorConflito = conflito && !!recarregar;
       substituir(situacao, mensagem('erro', texto),
         conflito && recarregar ? h('button', { type: 'button', class: 'botao-secundario', aoClicar: recarregar },
           'Recarregar dados') : null);
     } finally {
       enviando = false;
-      botao.disabled = false;
+      botao.disabled = bloqueadoPorConflito;
       form.removeAttribute('aria-busy');
     }
   }

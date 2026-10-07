@@ -75,6 +75,7 @@ export async function clienteApi(baseURL, login, senha = usuario(login).senha) {
     get: (u, e = 200) => chamar('GET', u, undefined, e).then((r) => r.dados),
     post: (u, d, e) => chamar('POST', u, d, e).then((r) => r.dados),
     put: (u, d, e = 200) => chamar('PUT', u, d, e).then((r) => r.dados),
+    patch: (u, d, e = 200) => chamar('PATCH', u, d, e).then((r) => r.dados),
     status: async (m, u, d) => (await chamar(m, u, d)).status,
     async usarUnidade(codigo) {
       const unidades = await api.get('/api/sessao/unidades');

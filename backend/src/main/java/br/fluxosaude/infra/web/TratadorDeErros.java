@@ -99,6 +99,13 @@ public class TratadorDeErros {
         return resposta(HttpStatus.CONFLICT, "CONFLITO_DE_VERSAO", e.getMessage(), req);
     }
 
+    /** O estado mudou desde a leitura (ex.: conteúdo da passagem de plantão): código específico. */
+    @ExceptionHandler(br.fluxosaude.compartilhado.ConflitoDeEstadoException.class)
+    ResponseEntity<ProblemDetail> conflitoDeEstado(br.fluxosaude.compartilhado.ConflitoDeEstadoException e,
+                                                   HttpServletRequest req) {
+        return resposta(HttpStatus.CONFLICT, e.codigo(), e.getMessage(), req);
+    }
+
     /** RF-036: escrita concorrente — versão, deadlock (40P01) ou espera de lock esgotada (55P03). */
     @ExceptionHandler(ConcurrencyFailureException.class)
     ResponseEntity<ProblemDetail> concorrencia(ConcurrencyFailureException e, HttpServletRequest req) {
@@ -129,6 +136,12 @@ public class TratadorDeErros {
             // Versão vista desatualizada recusada pelo banco (V14) sem passar pelo adaptador.
             return resposta(HttpStatus.CONFLICT, "CONFLITO_DE_VERSAO",
                     "O registro foi alterado por outra pessoa. Recarregue e tente novamente.", req);
+        }
+        if (e instanceof DataAccessException dae && "57014".equals(sqlState(dae))) {
+            // statement_timeout: consulta pesada demais (ex.: indicadores de um período longo).
+            LOG.warn("consulta cancelada por tempo (SQLSTATE 57014)");
+            return resposta(HttpStatus.SERVICE_UNAVAILABLE, "CONSULTA_DEMORADA",
+                    "A consulta demorou demais. Reduza o período ou filtre por setor e tente novamente.", req);
         }
         if (e instanceof DataAccessException dae && "55000".equals(sqlState(dae))) {
             // object_not_in_prerequisite_state: gatilho recusou mudança de estado (ex.: pendência
