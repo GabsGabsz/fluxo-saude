@@ -15,8 +15,12 @@ import java.util.Optional;
  */
 public final class DicionarioRelatorios {
 
-    /** Versão das definições: aparece no cabeçalho de tela, impressão e CSV. */
-    public static final String VERSAO = "relatorios-v1";
+    /**
+     * Versão das definições: aparece no cabeçalho de tela, impressão e CSV, e as definições usadas vão
+     * DENTRO de cada resultado (assinadas). v2 (revisão do PR #11): Qualidade pelo setor do fato e por
+     * bloqueios normalizados (V20); Evolução só com períodos encerrados; categoria do início.
+     */
+    public static final String VERSAO = "relatorios-v2";
     public static final String PROPOSTA = "PROPOSTA — extensão aprovada (issue #9); fórmulas institucionais pendentes (V-09)";
     private static final String REQ = "Extensão aprovada (issue #9), apoiada em RF-019/020/039";
 
@@ -83,11 +87,11 @@ public final class DicionarioRelatorios {
                         + "encerramento ou instante de referência", LINHA + " A espera é atribuída ao setor em que ocorreu, "
                         + "não ao setor atual.", "Abertos contam até o instante de referência.", "Sem tempo: linha omitida.",
                 "Cada estadia no setor conta pelo tempo sobreposto.");
-        d("BLOQUEIO_CATEGORIA", "Tempo bloqueado por categoria", "por categoria registrada na época: minutos sobrepostos "
+        d("BLOQUEIO_CATEGORIA", "Tempo bloqueado por categoria", "por categoria registrada no INÍCIO do bloqueio: minutos sobrepostos "
                 + "ao período; quantidade = intervalos com tempo no período; parte = intervalos INICIADOS no período",
                 "minutos, intervalos e episódios", "Intervalos de bloqueio (BLOQUEIO_DEFINIDO até o próximo evento de "
                         + "bloqueio ou o encerramento). Filtros de setor/etapa: só o trecho vivido no setor/etapa.",
-                "Nenhuma; redefinição do mesmo motivo continua o mesmo intervalo.", "—", "BLOQUEIO_DEFINIDO",
+                "Nenhuma; redefinição do mesmo motivo (ex.: só o detalhe mudou) continua o mesmo intervalo, com o início e a categoria originais.", "—", "BLOQUEIO_DEFINIDO",
                 "próximo evento de bloqueio, encerramento ou instante de referência", LINHA,
                 "Abertos contam até o instante de referência.", "Sem bloqueio registrado: \"sem dados\" (não significa "
                         + "ausência de espera).", "Cada intervalo conta pelo tempo sobreposto; um intervalo que começou "
@@ -135,13 +139,24 @@ public final class DicionarioRelatorios {
                 "Só abertas.", "—", "—");
         // ------------------------------------------------------------------ evolução
         d("EVOLUCAO", "Comparação entre períodos", "mesmas métricas no período escolhido e no período anterior de MESMA "
-                + "quantidade de dias locais; variação absoluta e percentual (ausente quando a base anterior é zero)",
-                "conforme a métrica", "Entradas, encerramentos (transferências), permanência dos encerrados (mediana), "
-                        + "pendências criadas/encerradas (no prazo) e tempo bloqueado por categoria.",
-                "Permanência: exclui encerramento administrativo (como na etapa 7).", "Cada métrica com sua base.",
-                "conforme a métrica", "conforme a métrica", PERIODO + " Os dois períodos usam as mesmas definições, "
-                        + "no mesmo instantâneo do banco.", "Alertas não são comparados (sem histórico).",
-                "Base zero: variação percentual ausente.", "Como nas seções correspondentes.");
+                + "quantidade de dias locais, ambos ENCERRADOS (fim até ontem no fuso da unidade); variação absoluta (na "
+                + "unidade da métrica: contagem, minutos, ou pontos percentuais para métricas em %) e variação relativa "
+                + "em % (ausente quando o valor anterior é zero; não se aplica a métricas que já são percentuais)",
+                "conforme a métrica", "Entradas, encerramentos (e transferências), permanência dos encerrados (mediana), "
+                        + "pendências criadas/encerradas (até o prazo) e tempo e inícios de bloqueio por categoria — cada "
+                        + "uma com o seu verbete neste resultado.",
+                "Permanência: exclui encerramento administrativo. Pendências \"até o prazo\": usa o ÚLTIMO prazo "
+                        + "registrado.", "Cada métrica com sua base.", "conforme a métrica", "conforme a métrica",
+                PERIODO + " Só períodos encerrados: um período que inclui hoje está incompleto e não é comparável. Os "
+                        + "dois períodos usam as mesmas definições, no mesmo instantâneo do banco; com horário de verão, "
+                        + "a duração em horas pode diferir (informada no resultado).", "Alertas não são comparados (sem histórico).",
+                "Valor anterior zero: variação relativa ausente.", "Como nas seções correspondentes.");
+        d("PERMANENCIA", "Permanência dos encerrados (evolução)", "mediana (percentil 50 contínuo) de (encerrado_em − "
+                + "entrada_em) dos episódios encerrados no período; n = encerrados incluídos", P,
+                "Episódios encerrados no período; com filtro de setor, o setor FINAL.",
+                "Desfecho \"encerramento administrativo\" (cancelamento/registro indevido) — proposta, como na etapa 7.",
+                "Encerrados incluídos (n).", "entrada_em", "encerrado_em", PERIODO, "Só encerrados.",
+                "Sem encerrados incluídos: \"sem dados\" (nunca zero).", "Um episódio conta uma vez.");
         // ------------------------------------------------------------------ qualidade
         d("ATUALIDADE", "Tempo desde o último registro", "referência − último registro (registrado_em) na linha do "
                 + "tempo dos abertos: média, mediana, P90, máximo; quantidade = com registro; base = abertos", P,
@@ -153,22 +168,39 @@ public final class DicionarioRelatorios {
                 "Abertos (na etapa da regra, se houver).", "—", "Abertos sujeitos à regra.", "último registro",
                 "instante de referência", ESTOQUE + " Nenhum prazo oficial é presumido: sem regra configurada, não "
                         + "há contagem.", "Só abertos.", "Sem regra: seção vazia.", "—");
-        d("REGISTROS_RETROATIVOS", "Registros retroativos", "registros feitos no período; parte = com ajuste manual "
-                + "(fato informado antes do registro); atraso (registro − fato) dos retroativos", P,
-                "Eventos da linha do tempo com registrado_em no período.", "—", "Registros no período.", "ocorrido_em",
-                "registrado_em", PERIODO, "Abertos e encerrados.", "—", "Cada registro uma vez.");
+        d("REGISTROS_RETROATIVOS", "Registros retroativos", "registros FEITOS no período (registrado_em); parte = com "
+                + "ajuste manual (fato informado antes do registro); atraso (registro − fato) dos retroativos", P,
+                "Eventos da linha do tempo com registrado_em no período. Com filtro de setor: o setor em vigor no INSTANTE "
+                        + "DO FATO (ocorrido_em), pela linha do tempo — nunca o setor atual; a transferência pertence ao "
+                        + "setor de destino.", "Com filtro de setor: fatos sem setor determinável (ver SETOR_NAO_ATRIBUIDO).",
+                "Registros no período.", "ocorrido_em (atribuição do setor)", "registrado_em (período)", PERIODO
+                        + " Dois marcos distintos: o PERÍODO é o do registro; o SETOR é o do fato.", "Abertos e encerrados.",
+                "—", "Cada registro uma vez.");
         d("CAUSA_EM_INVESTIGACAO_AGORA", "Bloqueios com causa ainda não definida", "abertos bloqueados com categoria "
                 + "NAO_DEFINIDA; base = abertos bloqueados", "episódios", "Abertos bloqueados.", "—", "Abertos bloqueados.",
                 "—", "—", ESTOQUE, "Só abertos.", "—", "—");
-        d("BLOQUEIOS_INICIADOS_SEM_CAUSA", "Bloqueios iniciados sem causa definida", "bloqueios iniciados no período "
-                + "com categoria NAO_DEFINIDA; base = bloqueios iniciados", "intervalos", "BLOQUEIO_DEFINIDO no período.",
-                "—", "Bloqueios iniciados.", "BLOQUEIO_DEFINIDO", "—", PERIODO, "—", "—", "—");
+        d("BLOQUEIOS_INICIADOS_SEM_CAUSA", "Bloqueios iniciados sem causa definida", "bloqueios INICIADOS no período "
+                + "com categoria NAO_DEFINIDA no início; base = bloqueios iniciados", "intervalos",
+                "Inícios dos intervalos de bloqueio normalizados (mesma definição de Gargalos e Evolução); com filtro de "
+                        + "setor, o setor em que o bloqueio começou.",
+                "Redefinição do mesmo motivo (ex.: só o detalhe mudou) não é novo bloqueio; bloqueio iniciado antes do "
+                        + "período não conta.", "Bloqueios iniciados.", "início do intervalo (BLOQUEIO_DEFINIDO que o abriu)",
+                "—", PERIODO, "Iniciados no período, abertos ou já removidos.", "—",
+                "Remoção seguida de novo bloqueio = dois inícios.");
+        d("SETOR_NAO_ATRIBUIDO", "Fatos sem setor determinável", "com filtro de setor: registros (REGISTROS) e inícios de "
+                + "bloqueio (BLOQUEIOS_INICIADOS) do período sem setor determinável pela linha do tempo; base = todos "
+                + "os do período, antes do filtro", "registros ou intervalos",
+                "Fatos anteriores ao primeiro evento de setor do episódio (ex.: registro legado sem evento de abertura).",
+                "—", "Fatos do período (todos os setores).", "—", "—", PERIODO,
+                "Abertos e encerrados.", "Ficam FORA do filtro de setor — não são atribuídos ao setor atual.", "—");
         d("COBERTURA", "Cobertura de campos opcionais", "DESTINO/PROTOCOLO_EM_TRANSFERENCIA: abertos em etapa de "
                 + "transferência com o campo registrado (quantidade) sobre a base — campo OPCIONAL: ausência não é falha",
                 "episódios", "Abertos em etapas Aceito/Transporte ou que exigem protocolo.", "—", "Abertos nessas etapas.",
                 "—", "—", ESTOQUE, "Só abertos.", "Base zero: ausente.", "—");
         d("LINHA_DO_TEMPO", "Cobertura da linha do tempo", "episódios no escopo com evento de abertura (quantidade) "
-                + "sobre o total (base)", "episódios", "Abertos agora, entrados ou encerrados no período.", "—",
+                + "sobre o total (base)", "episódios", "Escopo próprio: episódios abertos no instante de referência, que "
+                        + "entraram no período ou que encerraram no período. Filtro de setor: setor ATUAL (abertos) ou "
+                        + "FINAL (encerrados) — sem linha do tempo, não há como atribuir o setor da época.", "—",
                 "Episódios no escopo.", "—", "—", PERIODO, "Abertos e encerrados.",
                 "Sem linha do tempo, o episódio não entra nos tempos reconstruídos (gargalos).", "—");
     }
@@ -191,10 +223,47 @@ public final class DicionarioRelatorios {
         return Optional.ofNullable(DEFINICOES.get(codigo));
     }
 
+    /** Seções de dados que cada relatório pode devolver (a tela mostra todas, inclusive vazias). */
+    private static final Map<TipoRelatorio, List<String>> SECOES = Map.of(
+            TipoRelatorio.RESUMO, List.of("ENTRADAS", "ENCERRAMENTOS", "ENCERRAMENTOS_TOTAL", "ABERTOS", "ABERTOS_ETAPA",
+                    "ABERTOS_SETOR", "BLOQUEADOS_AGORA", "PENDENCIAS_ABERTAS", "CASOS_COM_VENCIDA", "CASOS_EM_ALERTA",
+                    "ALERTA_REGRA"),
+            TipoRelatorio.GARGALOS, List.of("ETAPA_CONCLUIDA", "ETAPA_EM_CURSO", "SETOR_TEMPO", "BLOQUEIO_CATEGORIA",
+                    "BLOQUEIO_MOTIVO", "BLOQUEIO_CONCLUIDO", "BLOQUEIO_EM_CURSO", "PENDENCIA_CATEGORIA", "PENDENCIA_RESPONSAVEL"),
+            TipoRelatorio.PENDENCIAS, List.of("CRIADAS_TOTAL", "CRIADAS", "ENCERRADAS", "ENCERRADAS_CATEGORIA", "ABERTAS_TOTAL",
+                    "ABERTAS", "ABERTAS_CRITICIDADE", "ABERTAS_RESPONSAVEL", "VENCIDAS_ATRASO", "LISTA_PENDENCIAS"),
+            TipoRelatorio.EVOLUCAO, List.of("EVOLUCAO", "ENTRADAS", "ENCERRAMENTOS", "PERMANENCIA", "PENDENCIAS_CRIADAS",
+                    "PENDENCIAS_ENCERRADAS", "BLOQUEIO_MINUTOS", "BLOQUEIO_MINUTOS_CATEGORIA"),
+            TipoRelatorio.QUALIDADE, List.of("ATUALIDADE", "ATUALIDADE_SETOR", "SEM_ATUALIZACAO_REGRA", "REGISTROS_RETROATIVOS",
+                    "CAUSA_EM_INVESTIGACAO_AGORA", "BLOQUEIOS_INICIADOS_SEM_CAUSA", "SETOR_NAO_ATRIBUIDO",
+                    "DESTINO_EM_TRANSFERENCIA", "PROTOCOLO_EM_TRANSFERENCIA", "LINHA_DO_TEMPO"));
+
+    public static List<String> secoes(TipoRelatorio tipo) {
+        return SECOES.get(tipo);
+    }
+
+    /**
+     * Definições relevantes para um relatório (uma por verbete, na ordem das seções): vão DENTRO do
+     * resultado, cobertas pela assinatura, para a tela, a impressão e o CSV não dependerem de outra
+     * consulta ao dicionário.
+     */
+    public static List<DefinicaoIndicador> definicoesDe(TipoRelatorio tipo) {
+        return secoes(tipo).stream().map(s -> verbeteDe(tipo, s)).distinct()
+                .map(c -> de(c).orElseThrow(() -> new IllegalStateException("verbete ausente: " + c))).toList();
+    }
+
     /** Verbete que define cada seção de dados (várias seções compartilham uma definição). */
     public static String verbeteDe(TipoRelatorio tipo, String secao) {
         if (tipo == TipoRelatorio.EVOLUCAO) {
-            return "EVOLUCAO";
+            return switch (secao) {
+                case "ENTRADAS" -> "ENTRADAS";
+                case "ENCERRAMENTOS" -> "ENCERRAMENTOS";
+                case "PERMANENCIA" -> "PERMANENCIA";
+                case "PENDENCIAS_CRIADAS" -> "CRIADAS";
+                case "PENDENCIAS_ENCERRADAS" -> "ENCERRADAS";
+                case "BLOQUEIO_MINUTOS", "BLOQUEIO_MINUTOS_CATEGORIA" -> "BLOQUEIO_CATEGORIA";
+                default -> "EVOLUCAO";
+            };
         }
         return switch (secao) {
             case "ENCERRAMENTOS_TOTAL" -> "ENCERRAMENTOS";

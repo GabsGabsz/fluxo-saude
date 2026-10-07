@@ -1,5 +1,6 @@
 // Relatórios gerenciais (issue #9): apresentação e CSV a partir do MESMO resultado devolvido pelo
-// servidor (nenhum recálculo). Funções puras — a tela, a versão de impressão e o CSV usam as mesmas
+// servidor (nenhum recálculo). As DEFINIÇÕES dos cálculos e as limitações vêm dentro do próprio
+// resultado (cobertas pela assinatura): tela, impressão e CSV não dependem de outra consulta. Funções puras — a tela, a versão de impressão e o CSV usam as mesmas
 // definições de seção, rótulos e cálculos derivados (percentual, variação), então representam o mesmo
 // conjunto de dados. Nada aqui grava no navegador.
 
@@ -81,29 +82,37 @@ export const SECOES = {
     { secao: 'REGISTROS_RETROATIVOS', titulo: 'Registros feitos no período e retroativos', colunas: [n('Registros', 'quantidade'), n('Retroativos (ajuste manual)', 'parte'), pct('%'), m('Atraso mediano dos retroativos', 'mediana'), m('P90', 'p90')] },
     { secao: 'CAUSA_EM_INVESTIGACAO_AGORA', titulo: 'Bloqueados agora com causa ainda em investigação', colunas: [n('Causa em investigação', 'quantidade'), n('Bloqueados', 'base'), pctQ('%')] },
     { secao: 'BLOQUEIOS_INICIADOS_SEM_CAUSA', titulo: 'Bloqueios iniciados no período sem causa definida', colunas: [n('Sem causa definida', 'quantidade'), n('Iniciados', 'base'), pctQ('%')] },
+    { secao: 'SETOR_NAO_ATRIBUIDO', soComFiltroDeSetor: true, titulo: 'Fatos sem setor determinável (fora do filtro de setor)', colunas: [grupo('Fatos', (l) => ({ REGISTROS: 'Registros', BLOQUEIOS_INICIADOS: 'Bloqueios iniciados' }[l.chave] || l.chave)), n('Sem setor da época', 'quantidade'), n('Todos do período', 'base')] },
     { secao: 'DESTINO_EM_TRANSFERENCIA', titulo: 'Destino registrado nos casos em transferência (campo opcional)', colunas: [n('Com destino', 'quantidade'), n('Em transferência', 'base'), pctQ('%')] },
     { secao: 'PROTOCOLO_EM_TRANSFERENCIA', titulo: 'Protocolo registrado nos casos aceitos/em transporte (opcional fora das etapas que o exigem)', colunas: [n('Com protocolo', 'quantidade'), n('Base', 'base'), pctQ('%')] },
     { secao: 'LINHA_DO_TEMPO', titulo: 'Cobertura da linha do tempo', colunas: [n('Com linha do tempo', 'quantidade'), n('Episódios no escopo', 'base'), pctQ('%')] },
   ],
 };
 
-/** Métricas da evolução: [título, seção, função(linha) → número ou nulo, formato]. */
+/**
+ * Métricas da evolução: [título, seção, função(linha) → número ou nulo, formato]. Unidades: 'n' =
+ * contagem, 'min' = minutos, 'pct' = percentual (variação absoluta em PONTOS PERCENTUAIS; variação
+ * relativa não se aplica).
+ */
 export const METRICAS_EVOLUCAO = [
   ['Entradas', 'ENTRADAS', (l) => l.quantidade, 'n'],
   ['Encerramentos', 'ENCERRAMENTOS', (l) => l.quantidade, 'n'],
   ['Transferências', 'ENCERRAMENTOS', (l) => l.parte, 'n'],
-  ['Permanência mediana (encerrados)', 'PERMANENCIA', (l) => l.mediana, 'min'],
+  ['Permanência mediana (encerrados, sem encerramento administrativo)', 'PERMANENCIA', (l) => l.mediana, 'min'],
   ['Encerrados na permanência (n)', 'PERMANENCIA', (l) => l.quantidade, 'n'],
   ['Pendências criadas', 'PENDENCIAS_CRIADAS', (l) => l.quantidade, 'n'],
   ['Pendências encerradas', 'PENDENCIAS_ENCERRADAS', (l) => l.quantidade, 'n'],
-  ['% encerradas até o prazo', 'PENDENCIAS_ENCERRADAS', (l) => percentual(l.parte, l.base), 'pct'],
+  ['% encerradas até o (último) prazo', 'PENDENCIAS_ENCERRADAS', (l) => percentual(l.parte, l.base), 'pct'],
   ['Tempo bloqueado no período', 'BLOQUEIO_MINUTOS', (l) => l.minutos, 'min'],
   ['Bloqueios iniciados', 'BLOQUEIO_MINUTOS', (l) => l.parte, 'n'],
 ];
 
+export const UNIDADE_VALOR = { n: 'contagem', min: 'minutos', pct: 'percentual (%)' };
+export const UNIDADE_VARIACAO = { n: 'contagem', min: 'minutos', pct: 'pontos percentuais (p.p.)' };
+
 const fmtPor = { n: fmtN, min: fmtMin, pct: fmtPct };
 
-/** Variação absoluta e percentual (ausente com base anterior zero ou ausente). */
+/** Variação absoluta e relativa (relativa ausente com base anterior zero ou ausente). */
 export function variacao(anterior, atual) {
   if (anterior === null || anterior === undefined || atual === null || atual === undefined) return { abs: null, pct: null };
   return { abs: atual - anterior, pct: anterior === 0 ? null : (100 * (atual - anterior)) / anterior };
@@ -116,12 +125,15 @@ function linhasDa(resultado, secao, periodo) {
 /** Linhas da comparação entre períodos (mesma função na tela e no CSV). */
 export function comparacao(resultado) {
   const uma = (secao, periodo) => linhasDa(resultado, secao, periodo).find((l) => l.chave === null) || null;
+  const comUnidades = (l) => ({ ...l, unidade: UNIDADE_VALOR[l.formato], unidadeVariacao: UNIDADE_VARIACAO[l.formato],
+    // métrica que já é percentual: a variação relativa (% de %) não se aplica
+    ...(l.formato === 'pct' ? { pct: null, relativaNaoSeAplica: true } : {}) });
   const linhas = METRICAS_EVOLUCAO.map(([titulo, secao, f, formato]) => {
     const a = uma(secao, 'ANTERIOR');
     const b = uma(secao, 'ATUAL');
     const va = a ? f(a) : null;
     const vb = b ? f(b) : null;
-    return { titulo, formato, anterior: va, atual: vb, ...variacao(va, vb) };
+    return comUnidades({ titulo, secao, formato, anterior: va, atual: vb, ...variacao(va, vb) });
   });
   const cats = [...new Set(linhasDa(resultado, 'BLOQUEIO_MINUTOS_CATEGORIA').map((l) => l.chave))].sort();
   for (const c of cats) {
@@ -129,7 +141,8 @@ export function comparacao(resultado) {
     const b = linhasDa(resultado, 'BLOQUEIO_MINUTOS_CATEGORIA', 'ATUAL').find((l) => l.chave === c);
     const va = a ? a.minutos : 0;
     const vb = b ? b.minutos : 0;
-    linhas.push({ titulo: `Tempo bloqueado — ${rotulos.categoria(c)}`, formato: 'min', anterior: va, atual: vb, ...variacao(va, vb) });
+    linhas.push(comUnidades({ titulo: `Tempo bloqueado — ${rotulos.categoria(c)}`, secao: 'BLOQUEIO_MINUTOS_CATEGORIA', formato: 'min',
+      anterior: va, atual: vb, ...variacao(va, vb) }));
   }
   return linhas;
 }
@@ -142,13 +155,45 @@ export function textoComparacao(l) {
     atual: f(l.atual),
     abs: l.abs === null ? SEM_DADOS : (l.formato === 'min' ? `${l.abs < 0 ? '−' : '+'}${formatarDuracao(Math.abs(l.abs) * 60000)}`
       : `${sinal(l.abs)}${l.formato === 'pct' ? `${l.abs.toFixed(1).replace('.', ',')} p.p.` : l.abs}`),
-    pct: l.pct === null ? SEM_DADOS : `${sinal(l.pct)}${l.pct.toFixed(1).replace('.', ',')}%`,
+    pct: l.relativaNaoSeAplica ? 'não se aplica' : (l.pct === null ? SEM_DADOS : `${sinal(l.pct)}${l.pct.toFixed(1).replace('.', ',')}%`),
+    unidade: l.unidade,
+    unidadeVariacao: l.unidadeVariacao,
   };
+}
+
+/** Definições usadas pelo relatório (do PRÓPRIO resultado), na ordem em que aparecem. */
+export function definicoes(resultado) {
+  return Array.isArray(resultado.definicoes) ? resultado.definicoes : [];
+}
+
+/** Definição que explica uma seção, a partir do próprio resultado (sem consultar o dicionário). */
+export function definicaoDaSecao(resultado, secao) {
+  const codigo = (resultado.verbetes || {})[secao] || secao;
+  return definicoes(resultado).find((d) => d.codigo === codigo) || null;
+}
+
+/** Campos de uma definição exibidos/exportados (mesma ordem na tela, na impressão e no CSV). */
+export const CAMPOS_DEFINICAO = [
+  ['Fórmula', 'formula'], ['Unidade de medida', 'unidadeMedida'], ['População', 'populacao'], ['Exclusões', 'exclusoes'],
+  ['Denominador', 'denominador'], ['Marco inicial', 'marcoInicial'], ['Marco final', 'marcoFinal'],
+  ['Fonte e campo temporal', 'campoTemporal'], ['Abertos e encerrados', 'abertosEEncerrados'], ['Dados ausentes', 'dadosAusentes'],
+  ['Repetições', 'repeticoes'], ['Período e fronteiras', 'periodoEFronteiras'], ['Situação', 'situacao'],
+];
+
+/** Texto da comparação de períodos (datas e duração real de cada um). */
+export function textoComparado(r) {
+  const c = r.comparacao;
+  if (!c) return null;
+  const h = (v) => (v === null || v === undefined ? '?' : String(v).replace('.', ','));
+  const dur = c.horasAtual === c.horasAnterior ? `mesma duração: ${h(c.horasAtual)} h`
+    : `duração diferente por horário de verão: anterior ${h(c.horasAnterior)} h, atual ${h(c.horasAtual)} h`;
+  return `${c.inicio} a ${c.fim} (período anterior com o mesmo número de dias locais; ${dur}; só períodos encerrados)`;
 }
 
 /** Tabelas de um resultado (tela e impressão). Seções sem linhas aparecem como "sem dados". */
 export function tabelas(resultado) {
-  const defs = SECOES[resultado.tipo] || [];
+  const comSetor = Boolean(resultado.filtros && resultado.filtros.setor);
+  const defs = (SECOES[resultado.tipo] || []).filter((d) => !d.soComFiltroDeSetor || comSetor);
   return defs.map((d) => {
     let linhas = linhasDa(resultado, d.secao);
     if (d.total) linhas = linhas.concat(linhasDa(resultado, d.total).map((l) => ({ ...l, rotulo: 'Total' })));
@@ -200,29 +245,34 @@ export function gerarCsv(r) {
   meta('Período (datas locais)', `${r.inicio} a ${r.fim}`);
   meta('Intervalo', `[${r.inicioEm}, ${r.fimEm})`);
   meta('Fuso horário', r.fuso);
-  if (r.comparacao) meta('Comparado com', `${r.comparacao.inicio} a ${r.comparacao.fim}`);
+  if (r.comparacao) meta('Comparado com', textoComparado(r));
   meta('Filtros', filtrosTexto(r));
   meta('Instante de referência', r.referencia);
   meta('Gerado em', r.geradoEm);
-  meta('Versão dos cálculos', r.versaoCalculo);
+  meta('Versão dos cálculos', `${r.versaoCalculo} (fórmulas propostas, V-09; definições no bloco "Definições" abaixo)`);
   meta('Assinatura do conjunto (SHA-256)', r.assinatura);
   meta('Cobertura', r.cobertura);
   meta('Formato', 'CSV com ";" e decimal ","; minutos como número; textos iniciados por = + - @ recebem apóstrofo');
   out.push('');
   out.push(linhaCsv(['Período', 'Seção', 'Título da seção', 'Chave', 'Rótulo', 'Grupo', 'Quantidade', 'Parte', 'Base',
-    'Percentual (parte÷base)', 'Episódios', 'Minutos', 'Média (min)', 'Mediana (min)', 'P90 (min)', 'Máximo (min)'].map(celulaTexto)));
+    'Percentual (parte÷base)', 'Episódios', 'Minutos', 'Média (min)', 'Mediana (min)', 'P90 (min)', 'Máximo (min)',
+    'Definição (código)'].map(celulaTexto)));
   const titulos = Object.fromEntries((SECOES[r.tipo] || []).map((d) => [d.secao, d.titulo]));
   for (const l of r.linhas) {
     out.push(linhaCsv([celulaTexto(l.periodo), celulaTexto(l.secao), celulaTexto(titulos[l.secao] || l.secao),
       celulaTexto(l.chave), celulaTexto(l.rotulo), celulaTexto(l.grupo), celulaNumero(l.quantidade), celulaNumero(l.parte),
       celulaNumero(l.base), celulaNumero(percentual(l.parte, l.base)), celulaNumero(l.episodios), celulaNumero(l.minutos),
-      celulaNumero(l.media), celulaNumero(l.mediana), celulaNumero(l.p90), celulaNumero(l.maximo)]));
+      celulaNumero(l.media), celulaNumero(l.mediana), celulaNumero(l.p90), celulaNumero(l.maximo),
+      celulaTexto((r.verbetes || {})[l.secao] || l.secao)]));
   }
   if (r.tipo === 'EVOLUCAO') {
     out.push('');
-    out.push(linhaCsv(['Comparação', 'Período anterior', 'Período atual', 'Variação', 'Variação %'].map(celulaTexto)));
+    out.push(linhaCsv(['Comparação', 'Período anterior', 'Período atual', 'Variação absoluta', 'Variação relativa (%)',
+      'Unidade do valor', 'Unidade da variação absoluta', 'Definição (código)'].map(celulaTexto)));
     for (const c of comparacao(r)) {
-      out.push(linhaCsv([celulaTexto(c.titulo), celulaNumero(c.anterior), celulaNumero(c.atual), celulaNumero(c.abs), celulaNumero(c.pct)]));
+      out.push(linhaCsv([celulaTexto(c.titulo), celulaNumero(c.anterior), celulaNumero(c.atual), celulaNumero(c.abs),
+        c.relativaNaoSeAplica ? celulaTexto('não se aplica') : celulaNumero(c.pct), celulaTexto(c.unidade),
+        celulaTexto(c.unidadeVariacao), celulaTexto((r.verbetes || {})[c.secao] || c.secao)]));
     }
   }
   const lista = r.listaPendencias;
@@ -242,6 +292,12 @@ export function gerarCsv(r) {
   out.push('');
   out.push(linhaCsv(['Limitação', 'Seção', 'Descrição'].map(celulaTexto)));
   for (const x of r.limitacoes || []) out.push(linhaCsv([celulaTexto(x.codigo), celulaTexto(x.secao), celulaTexto(x.texto)]));
+  // Definições dos cálculos usadas por ESTE resultado (mesmas da tela e da impressão).
+  out.push('');
+  out.push(linhaCsv([`Definições (${r.versaoCalculo})`, 'Nome', ...CAMPOS_DEFINICAO.map(([t]) => t)].map(celulaTexto)));
+  for (const d of definicoes(r)) {
+    out.push(linhaCsv([d.codigo, d.nome, ...CAMPOS_DEFINICAO.map(([, k]) => d[k])].map(celulaTexto)));
+  }
   return `﻿${out.join('\r\n')}\r\n`;
 }
 

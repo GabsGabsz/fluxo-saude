@@ -80,6 +80,10 @@ test('coordenação: gargalo calculado à mão, CSV e impressão iguais à tela,
   const dadosCsv = csv.split('\r\n').filter((l) => /^"";"[A-Z_]+";/.test(l));
   expect(dadosCsv.length).toBe(dados.linhas.length);
   await expect(relatorio.locator('dt:text-is("Linhas de dados") + dd')).toHaveText(String(dados.linhas.length));
+  // Definições dos cálculos vão no próprio CSV (as do resultado assinado), com a versão.
+  expect(csv).toContain(`"Definições (${dados.versaoCalculo})";"Nome";"Fórmula";"Unidade de medida";"População"`);
+  expect(csv).toContain('"BLOQUEIO_CATEGORIA";"Tempo bloqueado por categoria";"por categoria registrada no INÍCIO');
+  expect(dados.definicoes.map((d) => d.codigo)).toContain('BLOQUEIO_CATEGORIA');
   fs.mkdirSync(path.join(aqui, '..', 'capturas'), { recursive: true });
   fs.writeFileSync(path.join(aqui, '..', 'capturas', '10-relatorio-gargalos.csv'), csv);
 
@@ -107,12 +111,18 @@ test('coordenação: gargalo calculado à mão, CSV e impressão iguais à tela,
   await expect(filtros).toBeHidden();
   await expect(relatorio.getByRole('button', { name: 'Baixar CSV' })).toBeHidden();
   await expect(relatorio.locator('.assinatura')).toBeVisible();
+  await expect(relatorio.locator('[data-definicao="ABERTAS"]').first()).toBeVisible();   // definição impressa junto da seção
   await capturar(page, '10-relatorio-impressao');
   const pdf = await page.pdf({ preferCSSPageSize: true, printBackground: false });   // A4 paisagem (CSS @page)
   fs.writeFileSync(path.join(aqui, '..', 'capturas', '10-relatorio-pendencias.pdf'), pdf);
   const paginas = (pdf.toString('latin1').match(/\/Type\s*\/Page[^s]/g) || []).length;
   expect(paginas).toBeGreaterThan(1);
   await page.emulateMedia({ media: 'screen' });
+
+  // Evolução: período que inclui hoje é recusado NO SERVIDOR (não depende do navegador).
+  expect(await coord.status('GET', `/api/relatorios/evolucao?inicio=${fim}&fim=${fim}`)).toBe(422);
+  expect(await coord.status('GET', `/api/relatorios/evolucao?inicio=${ontem.toISOString().slice(0, 10)}&fim=${ontem.toISOString().slice(0, 10)}`))
+    .toBe(200);
 
   // Troca de unidade: o relatório da Norte some; o cálculo seguinte é da Sul.
   await escolherUnidade(page, SUL.nome);
@@ -129,6 +139,7 @@ test('direção: só agregados, sem lista nominal nem links; sessão revogada en
   await expect(page.getByRole('navigation', { name: 'Telas' })).toContainText('Relatórios');
   await page.getByRole('link', { name: 'Relatórios' }).click();
   const filtros = page.getByRole('form', { name: 'Filtros do relatório' });
+  const hoje = await filtros.getByLabel('Fim (inclusive)').inputValue();
   for (const tipo of ['RESUMO', 'PENDENCIAS', 'GARGALOS', 'EVOLUCAO', 'QUALIDADE']) {
     await filtros.getByLabel('Relatório').selectOption(tipo);
     const [r] = await Promise.all([page.waitForResponse((x) => x.url().includes(`/api/relatorios/${tipo.toLowerCase()}?`)),
@@ -141,7 +152,17 @@ test('direção: só agregados, sem lista nominal nem links; sessão revogada en
     await expect(page.locator('main a[href^="#/episodio"]')).toHaveCount(0);
     await expect(page.locator('main')).not.toContainText('Paciente Ficticio');
     if (tipo === 'PENDENCIAS') await expect(page.locator('main')).toContainText('Perfil sem acesso nominal');
-    if (tipo === 'EVOLUCAO') await expect(page.locator('main')).toContainText('Alertas operacionais não são comparados');
+    if (tipo === 'EVOLUCAO') {
+      await expect(page.locator('main')).toContainText('Alertas operacionais não são comparados');
+      // Só períodos encerrados: o formulário levou o fim para ontem e explica a restrição.
+      expect(await filtros.getByLabel('Fim (inclusive)').inputValue() < hoje).toBe(true);
+      await expect(filtros).toContainText('compara só períodos ENCERRADOS');
+      // Definições e limitações no próprio relatório (impressas), inclusive a exclusão da permanência.
+      const rel = page.getByRole('article', { name: 'Relatório' });
+      await expect(rel.getByRole('region', { name: 'Definições das métricas comparadas' })).toContainText('encerramento administrativo');
+      await expect(rel).toContainText('ÚLTIMO prazo');
+      await expect(rel).toContainText('pontos percentuais');
+    }
   }
   await capturar(page, '10-relatorio-direcao');
 

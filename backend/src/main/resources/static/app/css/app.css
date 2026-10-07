@@ -190,6 +190,8 @@ ol.linha-do-tempo .quando { font-variant-numeric: tabular-nums; color: var(--tex
 /* ------------------------------------------------------------------ relatórios */
 .relatorio .assinatura { font-family: monospace; font-size: .8rem; word-break: break-all; }
 .relatorio .secao-relatorio h3 { margin-top: 0; }
+.relatorio .definicao { margin: .25rem 0 .75rem; }
+.relatorio .definicao-campos { font-size: .85rem; gap: .1rem .75rem; }
 
 /* ------------------------------------------------------------------ impressão (relatórios: "salvar em PDF" pelo navegador) */
 /* Paisagem: tabelas largas dos relatórios ficam legíveis sem quebrar cada célula. */
@@ -212,7 +214,10 @@ ol.linha-do-tempo .quando { font-variant-numeric: tabular-nums; color: var(--tex
      genérico em h3/p dentro de seções indivisíveis fazia o Chromium empurrar seções inteiras e deixar
      páginas quase vazias (verificado no PDF gerado). */
   .secao-relatorio, .cabecalho-relatorio { break-inside: avoid; page-break-inside: avoid; }
-  .secao-relatorio[data-secao="LISTA_PENDENCIAS"] { break-inside: auto; page-break-inside: auto; }
+  .secao-relatorio[data-secao="LISTA_PENDENCIAS"], .secao-definicoes { break-inside: auto; page-break-inside: auto; }
+  .definicao { break-inside: avoid; page-break-inside: avoid; }
+  .secao-definicoes > h3 { break-after: avoid; page-break-after: avoid; }
+  .definicao-campos { font-size: 7.5pt; }
   .secao-relatorio[data-secao="LISTA_PENDENCIAS"] > h3,
   .secao-relatorio[data-secao="LISTA_PENDENCIAS"] > p { break-after: avoid; page-break-after: avoid; }
   a { color: inherit; text-decoration: none; }

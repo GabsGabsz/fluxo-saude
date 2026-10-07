@@ -10,6 +10,7 @@ import br.fluxosaude.identidade.aplicacao.ContextoOrigem;
 import br.fluxosaude.identidade.dominio.AcessoNegadoException;
 import br.fluxosaude.identidade.dominio.Permissao;
 import br.fluxosaude.identidade.dominio.UsuarioAutenticado;
+import br.fluxosaude.indicador.dominio.DefinicaoIndicador;
 import br.fluxosaude.relatorio.dominio.Canonico;
 import br.fluxosaude.relatorio.dominio.DicionarioRelatorios;
 import br.fluxosaude.relatorio.dominio.Limitacao;
@@ -59,7 +60,12 @@ public final class ServicoRelatorios {
     public record Filtros(UUID setor, String setorNome, UUID etapa, String etapaNome, String categoria) {
     }
 
-    public record Comparacao(LocalDate inicio, LocalDate fim, Instant inicioEm, Instant fimEm) {
+    /**
+     * Período anterior da evolução. {@code horasAnterior}/{@code horasAtual}: duração real dos dois
+     * intervalos (com horário de verão, dias locais de 23 h ou 25 h fazem as durações diferirem).
+     */
+    public record Comparacao(LocalDate inicio, LocalDate fim, Instant inicioEm, Instant fimEm, double horasAnterior,
+                             double horasAtual) {
     }
 
     /** @param motivo por que a lista não está disponível (perfil, limite) — nulo quando disponível */
@@ -70,7 +76,8 @@ public final class ServicoRelatorios {
                             String fuso, LocalDate inicio, LocalDate fim, Instant inicioEm, Instant fimEm, Instant referencia,
                             Instant geradoEm, Filtros filtros, Comparacao comparacao, List<LinhaRelatorio> linhas,
                             ListaPendencias listaPendencias, List<Limitacao> limitacoes, String cobertura,
-                            Map<String, String> verbetes, String assinatura, String comprovante) {
+                            Map<String, String> verbetes, List<DefinicaoIndicador> definicoes, String assinatura,
+                            String comprovante) {
     }
 
     public record Exportacao(long registro, String assinatura, Formato formato) {
@@ -131,8 +138,8 @@ public final class ServicoRelatorios {
                 !c.lista().itens().isEmpty(), c.linhas().size()));
         return new Resultado(tipo, tipo.titulo(), DicionarioRelatorios.VERSAO, unidadeId, c.unidade().nome(),
                 c.unidade().fuso(), inicio, fim, c.periodo().inicio(), c.periodo().fim(), c.referencia(), geradoEm, c.filtros(),
-                c.comparacao(), c.linhas(), c.lista(), c.limitacoes(), cobertura(c.unidade().nome()), verbetes(tipo, c),
-                assinatura, comprovante);
+                c.comparacao(), c.linhas(), c.lista(), c.limitacoes(), cobertura(c.unidade().nome()), verbetes(tipo),
+                DicionarioRelatorios.definicoesDe(tipo), assinatura, comprovante);
     }
 
     private Calculo calcular(RepositorioRelatorios r, TipoRelatorio tipo, UUID unidadeId, LocalDate inicio, LocalDate fim,
@@ -141,6 +148,11 @@ public final class ServicoRelatorios {
         RepositorioRelatorios.Unidade unidade = r.unidade(unidadeId);
         LocalDate hoje = LocalDate.ofInstant(agora, ZoneId.of(unidade.fuso()));
         RegraVioladaException.exigir(!fim.isAfter(hoje), "PERIODO_FUTURO", "O período não pode terminar depois de hoje");
+        // Evolução: só períodos ENCERRADOS. Um período que inclui hoje está incompleto e não é comparável
+        // com o anterior completo (ex.: hoje ao meio-dia × ontem inteiro).
+        RegraVioladaException.exigir(tipo != TipoRelatorio.EVOLUCAO || fim.isBefore(hoje), "PERIODO_INCOMPLETO",
+                "A evolução compara só períodos encerrados: o fim deve ser no máximo ontem (" + hoje.minusDays(1)
+                        + ", no fuso " + unidade.fuso() + ").");
         String setorNome = null;
         String etapaNome = null;
         if (setor != null) {
@@ -202,7 +214,9 @@ public final class ServicoRelatorios {
                 LocalDate antInicio = inicio.minusDays(dias);
                 LocalDate antFim = inicio.minusDays(1);
                 RepositorioRelatorios.Periodo pa = r.periodo(unidade.fuso(), antInicio, antFim);
-                comparacao = new Comparacao(antInicio, antFim, pa.inicio(), pa.fim());
+                double horasAtual = Duration.between(p.inicio(), p.fim()).toMinutes() / 60.0;
+                double horasAnterior = Duration.between(pa.inicio(), pa.fim()).toMinutes() / 60.0;
+                comparacao = new Comparacao(antInicio, antFim, pa.inicio(), pa.fim(), horasAnterior, horasAtual);
                 r.metricasPeriodo(unidadeId, p, agora, setor).forEach(l -> linhas.add(l.comPeriodo("ATUAL")));
                 r.metricasPeriodo(unidadeId, pa, agora, setor).forEach(l -> linhas.add(l.comPeriodo("ANTERIOR")));
                 RepositorioRelatorios.MudancasRegras m = r.mudancasRegras(unidadeId, pa.inicio(), p.fim());
@@ -216,11 +230,36 @@ public final class ServicoRelatorios {
                         ? "Sem histórico de versões de regras de alerta nesta unidade."
                         : "O histórico de versões das regras de alerta começa em " + m.historicoDesde()
                                 + "; alterações anteriores não são conhecidas."));
+                lim.add(new Limitacao("PERIODOS_ENCERRADOS", null, "Só períodos encerrados são comparados: o atual termina "
+                        + "em " + fim + " (até ontem no fuso " + unidade.fuso() + "), sem o dia em curso."));
                 lim.add(new Limitacao("PERIODOS_EQUIVALENTES", null, "Os dois períodos têm o mesmo número de dias locais ("
-                        + dias + "); com horário de verão, a duração em horas pode diferir em uma hora."));
+                        + dias + ")" + (horasAtual == horasAnterior
+                        ? " e a mesma duração (" + horas(horasAtual) + " h)."
+                        : ", mas durações diferentes por horário de verão: atual " + horas(horasAtual) + " h, anterior "
+                                + horas(horasAnterior) + " h.")));
+                lim.add(new Limitacao("PERMANENCIA_SEM_ADMINISTRATIVO", "PERMANENCIA", "Permanência: exclui encerramentos "
+                        + "administrativos (cancelamento/registro indevido); n mostra os encerrados incluídos."));
+                lim.add(new Limitacao("PRAZO_ULTIMO", "PENDENCIAS_ENCERRADAS", "\"Até o prazo\" compara o encerramento com o "
+                        + "ÚLTIMO prazo registrado de cada pendência."));
+                lim.add(new Limitacao("UNIDADES_DA_VARIACAO", "EVOLUCAO", "Variação absoluta na unidade da métrica (contagem, "
+                        + "minutos, ou pontos percentuais para métricas em %); variação relativa em % do valor anterior "
+                        + "(ausente com anterior zero; não se aplica a métricas em %)."));
             }
             case QUALIDADE -> {
                 linhas.addAll(r.qualidade(unidadeId, p, agora, setor));
+                lim.add(new Limitacao("REGISTRO_X_FATO", "REGISTROS_RETROATIVOS", "Período pelo instante do REGISTRO; com "
+                        + "filtro de setor, cada registro é atribuído ao setor em vigor no instante do FATO, pela linha do "
+                        + "tempo (não ao setor atual)."));
+                lim.add(new Limitacao("ESCOPO_LINHA_DO_TEMPO", "LINHA_DO_TEMPO", "Escopo próprio: abertos agora, entrados ou "
+                        + "encerrados no período; o filtro de setor usa o setor atual (abertos) ou final (encerrados), "
+                        + "porque sem linha do tempo não há setor da época."));
+                long semSetor = linhas.stream().filter(l -> "SETOR_NAO_ATRIBUIDO".equals(l.secao()) && l.quantidade() != null)
+                        .mapToLong(LinhaRelatorio::quantidade).sum();
+                if (setor != null && semSetor > 0) {
+                    lim.add(new Limitacao("SETOR_NAO_ATRIBUIDO", "SETOR_NAO_ATRIBUIDO", semSetor + " fato(s) do período sem "
+                            + "setor determinável pela linha do tempo ficaram fora do filtro (não foram atribuídos ao "
+                            + "setor atual)."));
+                }
                 lim.add(new Limitacao("OPCIONAL", "DESTINO_EM_TRANSFERENCIA", "Destino e protocolo são campos OPCIONAIS fora das "
                         + "etapas que os exigem: a ausência é falta de informação, não falha do registro."));
                 lim.add(new Limitacao("FALTA_DE_INFORMACAO", null, "Ausência de registro (por exemplo, nenhum bloqueio ou "
@@ -276,14 +315,15 @@ public final class ServicoRelatorios {
                 + "agora; alertas passados não são reconstruídos."));
     }
 
-    /** Seção → verbete do dicionário que a define (para a tela, a impressão e o CSV). */
-    private static Map<String, String> verbetes(TipoRelatorio tipo, Calculo c) {
+    /** Seção → verbete que a define, para TODAS as seções do relatório (inclusive as sem dados). */
+    private static Map<String, String> verbetes(TipoRelatorio tipo) {
         Map<String, String> m = new java.util.TreeMap<>();
-        c.linhas().forEach(l -> m.put(l.secao(), DicionarioRelatorios.verbeteDe(tipo, l.secao())));
-        if (tipo == TipoRelatorio.PENDENCIAS) {
-            m.put("LISTA_PENDENCIAS", "LISTA_PENDENCIAS");
-        }
+        DicionarioRelatorios.secoes(tipo).forEach(s -> m.put(s, DicionarioRelatorios.verbeteDe(tipo, s)));
         return m;
+    }
+
+    private static String horas(double h) {
+        return h == Math.rint(h) ? String.valueOf((long) h) : String.valueOf(h).replace('.', ',');
     }
 
     private static List<Limitacao> comuns(boolean comSetor) {
@@ -331,7 +371,7 @@ public final class ServicoRelatorios {
                 c.filtros().etapaNome(), c.filtros().categoria()));
         if (c.comparacao() != null) {
             l.add(Canonico.linha("comparacao", c.comparacao().inicio(), c.comparacao().fim(), c.comparacao().inicioEm(),
-                    c.comparacao().fimEm()));
+                    c.comparacao().fimEm(), c.comparacao().horasAnterior(), c.comparacao().horasAtual()));
         }
         for (LinhaRelatorio x : c.linhas()) {
             l.add(Canonico.linha("linha", x.periodo(), x.secao(), x.chave(), x.rotulo(), x.grupo(), x.quantidade(), x.parte(),
@@ -345,6 +385,14 @@ public final class ServicoRelatorios {
         }
         for (Limitacao x : c.limitacoes()) {
             l.add(Canonico.linha("limitacao", x.codigo(), x.secao(), x.texto()));
+        }
+        // Definições usadas para interpretar os números: fazem parte do conjunto assinado.
+        verbetes(tipo).forEach((secao, verbete) -> l.add(Canonico.linha("verbete", secao, verbete)));
+        for (DefinicaoIndicador d : DicionarioRelatorios.definicoesDe(tipo)) {
+            l.add(Canonico.linha("definicao", d.codigo(), d.nome(), d.requisitos(), d.finalidade(), d.formula(),
+                    d.unidadeMedida(), d.populacao(), d.exclusoes(), d.denominador(), d.marcoInicial(), d.marcoFinal(),
+                    d.campoTemporal(), d.abertosEEncerrados(), d.dadosAusentes(), d.repeticoes(), d.periodoEFronteiras(),
+                    d.situacao()));
         }
         return Canonico.juntar(l);
     }

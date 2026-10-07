@@ -162,9 +162,18 @@ class RelatoriosIT extends IntegracaoBase {
         assertEquals(1, contar(marco, "CONSULTA_RELATORIO_PENDENCIAS"), "leitura nominal registrada");
 
         // ---------------------------------------------------------------- evolução e qualidade
-        JsonNode ev = get(coord, "/api/relatorios/evolucao?" + periodo);
-        assertEquals(LocalDate.now(ZoneId.of(FUSO)).minusDays(3).toString(), s(ev.get("comparacao").get("inicio")));
+        // Evolução só com períodos encerrados (fim até ontem no fuso da unidade): incluir hoje é recusado.
+        HttpResponse<String> incompleta = exigir(422, coord.enviar("GET", "/api/relatorios/evolucao?" + periodo, null));
+        assertTrue(incompleta.body().contains("PERIODO_INCOMPLETO"), incompleta.body());
+        LocalDate hoje = LocalDate.now(ZoneId.of(FUSO));
+        JsonNode ev = get(coord, "/api/relatorios/evolucao?inicio=" + hoje.minusDays(2) + "&fim=" + hoje.minusDays(1));
+        assertEquals(hoje.minusDays(4).toString(), s(ev.get("comparacao").get("inicio")));
         assertTrue(ev.get("limitacoes").toString().contains("ALERTAS_NAO_COMPARADOS"));
+        assertTrue(ev.get("limitacoes").toString().contains("PERIODOS_ENCERRADOS"));
+        // Definições relevantes DENTRO do resultado (assinado), sem depender do dicionário separado.
+        assertTrue(ev.get("definicoes").toString().contains("encerramento administrativo"), "permanência: exclusão");
+        assertTrue(ev.get("definicoes").toString().contains("ÚLTIMO prazo"), "pendências: último prazo");
+        assertEquals("PERMANENCIA", s(ev.get("verbetes").get("PERMANENCIA")));
         JsonNode q = get(coord, "/api/relatorios/qualidade?" + periodo);
         assertEquals(3, valor(q, "LINHA_DO_TEMPO", null, "quantidade"), "E1, E2 e E3 têm linha do tempo");
         assertEquals(3 + ABERTOS_EM_MASSA, valor(q, "LINHA_DO_TEMPO", null, "base"));

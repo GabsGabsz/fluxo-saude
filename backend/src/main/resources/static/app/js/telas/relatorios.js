@@ -5,12 +5,16 @@
 // visto. Antes de liberar o CSV ou abrir a impressão, a exportação é registrada no servidor (que confere
 // o comprovante e a permissão). A impressão/PDF é feita PELO NAVEGADOR (não há PDF gerado no servidor) e
 // o sistema não tem como comprovar que ela foi concluída. Nada é guardado no navegador.
+// As definições dos cálculos usadas na tela, na impressão e no CSV vêm DENTRO do resultado (assinado);
+// o dicionário geral abaixo é só material complementar (se ele falhar, o relatório não perde nada).
+// Evolução: só períodos encerrados (fim até ontem no fuso da unidade) — o servidor também recusa.
 
 import { h, substituir, campo, opcoes, mensagem, carregando, etiqueta } from '../nucleo/dom.js';
 import { mensagemDeErro, ErroApi } from '../nucleo/api.js';
 import { formatarDataHora, isoParaLocalDaUnidade } from '../nucleo/tempo.js';
 import * as rotulos from '../nucleo/rotulos.js';
-import { tabelas, comparacao, textoComparacao, gerarCsv, nomeArquivo, filtrosTexto } from '../nucleo/relatorios.js';
+import { tabelas, comparacao, textoComparacao, gerarCsv, nomeArquivo, filtrosTexto, definicaoDaSecao, definicoes, CAMPOS_DEFINICAO,
+  textoComparado } from '../nucleo/relatorios.js';
 
 const TIPOS = [
   ['RESUMO', 'Resumo gerencial da operação'],
@@ -25,11 +29,12 @@ const COM_CATEGORIA = new Set(['GARGALOS', 'PENDENCIAS']);
 export function montar(raiz, ctx) {
   let ativo = true;
   let atual = null;          // resultado exibido (fonte única de tela, impressão e CSV)
-  let dicionario = null;
   const cat = ctx.catalogo();
   const fuso = ctx.fuso();
   const hoje = isoParaLocalDaUnidade(ctx.agora(), fuso).slice(0, 10);
-  const seteDias = (() => { const d = new Date(`${hoje}T12:00:00Z`); d.setUTCDate(d.getUTCDate() - 6); return d.toISOString().slice(0, 10); })();
+  const menosDias = (iso, n) => { const d = new Date(`${iso}T12:00:00Z`); d.setUTCDate(d.getUTCDate() - n); return d.toISOString().slice(0, 10); };
+  const seteDias = menosDias(hoje, 6);
+  const ontem = menosDias(hoje, 1);
 
   const tipo = h('select', { required: true }, opcoes(TIPOS.map(([v, r]) => ({ valor: v, rotulo: r }))));
   const inicio = h('input', { type: 'date', required: true, value: seteDias, max: hoje });
@@ -42,6 +47,9 @@ export function montar(raiz, ctx) {
   const campoEtapa = campo('Etapa (só gargalos)', etapa);
   const campoCategoria = campo('Categoria de bloqueio', categoria);
   const situacao = h('div', { 'aria-live': 'polite' });
+  const avisoEvolucao = h('p', { class: 'discreto', id: 'aviso-evolucao', hidden: true },
+    `A evolução compara só períodos ENCERRADOS: o fim vai até ontem (${dataBr(ontem)}, no fuso ${fuso}). Um período que inclui `
+    + 'hoje está incompleto e não é comparável com o anterior completo. O período anterior tem o mesmo número de dias locais.');
   const resultado = h('div');
   const dic = h('section', { class: 'cartao nao-imprimir', 'aria-labelledby': 'tit-dic-rel' });
   const botao = h('button', { type: 'submit' }, 'Calcular');
@@ -52,6 +60,7 @@ export function montar(raiz, ctx) {
   } },
   h('div', { class: 'linha' }, campo('Relatório', tipo), campo('Início (data local da unidade)', inicio), campo('Fim (inclusive)', fim)),
   h('div', { class: 'linha' }, campo('Setor', setor), campoEtapa, campoCategoria),
+  avisoEvolucao,
   h('div', { class: 'acoes' }, botao));
 
   function ajustarFiltros() {
@@ -60,6 +69,15 @@ export function montar(raiz, ctx) {
     campoCategoria.hidden = !COM_CATEGORIA.has(t);
     if (!COM_ETAPA.has(t)) etapa.value = '';
     if (!COM_CATEGORIA.has(t)) categoria.value = '';
+    // Evolução: datas válidas (período encerrado) e a restrição explicada; os demais podem incluir hoje.
+    const evolucao = t === 'EVOLUCAO';
+    avisoEvolucao.hidden = !evolucao;
+    const maximo = evolucao ? ontem : hoje;
+    fim.max = maximo;
+    inicio.max = maximo;
+    if (fim.value > maximo) fim.value = maximo;
+    if (inicio.value > fim.value) inicio.value = menosDias(fim.value, 6);
+    if (evolucao) fim.setAttribute('aria-describedby', 'aviso-evolucao'); else fim.removeAttribute('aria-describedby');
   }
   tipo.addEventListener('change', () => { ajustarFiltros(); atual = null; substituir(resultado); });
   ajustarFiltros();
@@ -153,13 +171,13 @@ export function montar(raiz, ctx) {
           h('dt', {}, 'Unidade'), h('dd', {}, r.unidadeNome),
           h('dt', {}, 'Período'), h('dd', {}, `${dataBr(r.inicio)} a ${dataBr(r.fim)} (datas locais; intervalo `,
             `[${formatarDataHora(r.inicioEm, fuso)}, ${formatarDataHora(r.fimEm, fuso)}))`),
-          r.comparacao ? [h('dt', {}, 'Comparado com'), h('dd', {}, `${dataBr(r.comparacao.inicio)} a ${dataBr(r.comparacao.fim)} `
-            + '(período anterior de mesma duração)')] : null,
+          r.comparacao ? [h('dt', {}, 'Comparado com'), h('dd', {}, `${dataBr(r.comparacao.inicio)} a ${dataBr(r.comparacao.fim)} `,
+            textoComparado(r).slice(textoComparado(r).indexOf('(')))] : null,
           h('dt', {}, 'Fuso horário'), h('dd', {}, r.fuso),
           h('dt', {}, 'Filtros'), h('dd', {}, filtrosTexto(r)),
           h('dt', {}, 'Instante de referência'), h('dd', {}, formatarDataHora(r.referencia, fuso), ' (estoque e idades)'),
           h('dt', {}, 'Gerado em'), h('dd', {}, formatarDataHora(r.geradoEm, fuso)),
-          h('dt', {}, 'Versão dos cálculos'), h('dd', {}, r.versaoCalculo, ' — fórmulas propostas (V-09)'),
+          h('dt', {}, 'Versão dos cálculos'), h('dd', {}, r.versaoCalculo, ' — fórmulas propostas (V-09); definições junto de cada seção'),
           h('dt', {}, 'Linhas de dados'), h('dd', { class: 'numero' }, String(r.linhas.length)),
           h('dt', {}, 'Assinatura do conjunto'), h('dd', { class: 'assinatura' }, r.assinatura)),
         h('p', { class: 'discreto' }, r.cobertura),
@@ -173,11 +191,21 @@ export function montar(raiz, ctx) {
       r.tipo === 'PENDENCIAS' ? secaoLista(r) : null));
   }
 
+  /** Definição (do PRÓPRIO resultado) exibida junto da seção — também na impressão. */
+  function blocoDefinicao(def, completo) {
+    if (!def) return null;
+    const campos = completo ? CAMPOS_DEFINICAO
+      : CAMPOS_DEFINICAO.filter(([, k]) => ['formula', 'unidadeMedida', 'populacao', 'exclusoes', 'denominador'].includes(k));
+    return h('div', { class: 'definicao', 'data-definicao': def.codigo },
+      h('p', { class: 'discreto' }, h('strong', {}, `Definição — ${def.nome} `), `(${def.codigo}; ${atual ? atual.versaoCalculo : ''})`),
+      h('dl', { class: 'dados definicao-campos' }, campos.flatMap(([rotulo, k]) => [h('dt', {}, rotulo), h('dd', {}, def[k] || '—')])));
+  }
+
   function secaoTabela(t) {
-    const def = verbete(t.verbete);
+    const def = definicaoDaSecao(atual, t.secao);
     return h('section', { class: 'cartao secao-relatorio', 'aria-label': t.titulo, 'data-secao': t.secao },
       h('h3', {}, t.titulo, ' ', etiqueta('neutro', 'Proposta (V-09)')),
-      def ? h('p', { class: 'discreto' }, `Cálculo: ${def.formula}. População: ${def.populacao}`) : null,
+      blocoDefinicao(def, false),
       t.limitacoes.map((x) => h('p', { class: 'mensagem mensagem-aviso limitacao', role: 'note', 'data-limitacao': x.codigo },
         h('strong', {}, 'Limitação: '), x.texto)),
       t.vazia ? h('p', { class: 'vazio' }, 'Sem dados para este recorte (ausência de registro não é ausência de problema).')
@@ -185,13 +213,30 @@ export function montar(raiz, ctx) {
   }
 
   function secaoEvolucao(r) {
-    const linhas = comparacao(r).map((c) => { const t = textoComparacao(c); return [c.titulo, t.anterior, t.atual, t.abs, t.pct]; });
-    return h('section', { class: 'cartao secao-relatorio', 'aria-label': 'Comparação entre períodos', 'data-secao': 'EVOLUCAO' },
-      h('h3', {}, 'Comparação entre períodos', ' ', etiqueta('neutro', 'Proposta (V-09)')),
-      h('p', { class: 'discreto' }, 'Valores absolutos dos dois períodos (mesmas definições, mesmo instantâneo do banco); variação '
-        + 'percentual ausente quando o período anterior é zero.'),
-      tabela(['Métrica', `Anterior (${dataBr(r.comparacao.inicio)}–${dataBr(r.comparacao.fim)})`,
-        `Atual (${dataBr(r.inicio)}–${dataBr(r.fim)})`, 'Variação', 'Variação %'], linhas));
+    const linhas = comparacao(r).map((c) => {
+      const t = textoComparacao(c);
+      return [c.titulo, t.anterior, t.atual, t.abs, t.pct, t.unidade, t.unidadeVariacao];
+    });
+    const secoesEv = new Set(['EVOLUCAO', 'ENTRADAS', 'ENCERRAMENTOS', 'PERMANENCIA', 'PENDENCIAS_CRIADAS', 'PENDENCIAS_ENCERRADAS',
+      'BLOQUEIO_MINUTOS', 'BLOQUEIO_MINUTOS_CATEGORIA']);
+    const lims = (r.limitacoes || []).filter((x) => secoesEv.has(x.secao));
+    return [
+      h('section', { class: 'cartao secao-relatorio', 'aria-label': 'Comparação entre períodos', 'data-secao': 'EVOLUCAO' },
+        h('h3', {}, 'Comparação entre períodos', ' ', etiqueta('neutro', 'Proposta (V-09)')),
+        h('p', { class: 'discreto' }, 'Valores absolutos dos dois períodos ENCERRADOS (mesmas definições, mesmo instantâneo do banco). '
+          + 'Variação absoluta na unidade da métrica (contagem, minutos ou pontos percentuais); variação relativa em % do valor '
+          + 'anterior — ausente quando o anterior é zero e não aplicável a métricas que já são percentuais.'),
+        lims.map((x) => h('p', { class: 'mensagem mensagem-aviso limitacao', role: 'note', 'data-limitacao': x.codigo },
+          h('strong', {}, 'Limitação: '), x.texto)),
+        tabela(['Métrica', `Anterior (${dataBr(r.comparacao.inicio)}–${dataBr(r.comparacao.fim)})`,
+          `Atual (${dataBr(r.inicio)}–${dataBr(r.fim)})`, 'Variação absoluta', 'Variação relativa (%)', 'Unidade do valor',
+          'Unidade da variação'], linhas)),
+      // Definições das métricas comparadas: do próprio resultado, impressas junto (sem o dicionário separado).
+      h('section', { class: 'cartao secao-relatorio secao-definicoes', 'aria-label': 'Definições das métricas comparadas',
+        'data-secao': 'DEFINICOES' },
+      h('h3', {}, `Definições das métricas comparadas (${r.versaoCalculo})`),
+      definicoes(r).map((d) => blocoDefinicao(d, true))),
+    ];
   }
 
   function secaoLista(r) {
@@ -229,19 +274,16 @@ export function montar(raiz, ctx) {
       h('tbody', {}, linhas.map((l) => h('tr', {}, l.map((v, i) => h('td', { 'data-rotulo': cabecalho[i] }, v)))))));
   }
 
-  function verbete(codigo) {
-    return dicionario ? dicionario.definicoes.find((d) => d.codigo === codigo) : null;
-  }
-
   async function carregarDicionario() {
     substituir(dic, h('h2', { id: 'tit-dic-rel' }, 'Dicionário dos relatórios'), carregando());
     try {
-      dicionario = await ctx.api.obter('/api/relatorios/dicionario');
+      const dicionario = await ctx.api.obter('/api/relatorios/dicionario');
       if (!ativo) return;
       const linha = (rotulo, texto) => [h('dt', {}, rotulo), h('dd', {}, texto)];
       substituir(dic, h('h2', { id: 'tit-dic-rel' }, `Dicionário dos relatórios (${dicionario.versao})`),
-        h('p', { class: 'discreto' }, 'Como cada número é calculado. Extensão aprovada do projeto (issue #9); fórmulas institucionais '
-          + 'pendentes de validação (V-09).'),
+        h('p', { class: 'discreto' }, 'Material complementar: o relatório calculado já traz, junto de cada seção (e na impressão e '
+          + 'no CSV), as definições que usou. Extensão aprovada do projeto (issue #9); fórmulas institucionais pendentes de '
+          + 'validação (V-09).'),
         dicionario.definicoes.map((d) => h('details', { class: 'cartao' }, h('summary', {}, d.nome, ' ', etiqueta('neutro', 'Proposta')),
           h('dl', { class: 'dados' },
             linha('Fórmula', d.formula), linha('Unidade de medida', d.unidadeMedida), linha('População', d.populacao),
@@ -249,7 +291,6 @@ export function montar(raiz, ctx) {
             linha('Marco final', d.marcoFinal), linha('Fonte e campo temporal', d.campoTemporal),
             linha('Abertos e encerrados', d.abertosEEncerrados), linha('Dados ausentes', d.dadosAusentes),
             linha('Repetições', d.repeticoes), linha('Período e fronteiras', d.periodoEFronteiras), linha('Situação', d.situacao)))));
-      if (atual) desenhar(atual);
     } catch (e) {
       if (!ativo || (e && e.name === 'RespostaDescartada')) return;
       substituir(dic, h('h2', { id: 'tit-dic-rel' }, 'Dicionário dos relatórios'), mensagem('erro', mensagemDeErro(e)));

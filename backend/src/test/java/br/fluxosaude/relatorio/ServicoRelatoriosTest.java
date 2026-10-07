@@ -78,6 +78,7 @@ class ServicoRelatoriosTest {
         final List<Map<String, Object>> dadosRegistrados = new ArrayList<>();
         final List<Collection<UUID>> consultasNominais = new ArrayList<>();
         final List<Periodo> periodosPedidos = new ArrayList<>();
+        String fuso = "America/Fortaleza";
         int transacoes;
 
         @Override
@@ -88,7 +89,7 @@ class ServicoRelatoriosTest {
 
         @Override
         public Unidade unidade(UUID id) {
-            return new Unidade(id, "UPA Teste", "America/Fortaleza");
+            return new Unidade(id, "UPA Teste", fuso);
         }
 
         @Override
@@ -255,21 +256,112 @@ class ServicoRelatoriosTest {
         banco.linhas = List.of(linha("ENTRADAS", null, 4L, 1L));
         assertNotEquals(a.assinatura(), consultar(coord, TipoRelatorio.RESUMO).assinatura(), "um valor diferente muda a assinatura");
         assertEquals(64, a.assinatura().length());
-        assertEquals("relatorios-v1", a.versaoCalculo());
+        assertEquals("relatorios-v2", a.versaoCalculo());
         assertEquals(T0, a.referencia());
         assertEquals("ENTRADAS", a.verbetes().get("ENTRADAS"));
     }
 
     @Test
     void evolucaoComparaComPeriodoAnteriorDeMesmaDuracao() {
-        ServicoRelatorios.Resultado r = servico.consultar(coord, ORIGEM, TipoRelatorio.EVOLUCAO, LocalDate.of(2026, 10, 1),
-                LocalDate.of(2026, 10, 7), null, null, null);
-        assertEquals(LocalDate.of(2026, 9, 24), r.comparacao().inicio());
-        assertEquals(LocalDate.of(2026, 9, 30), r.comparacao().fim());
+        ServicoRelatorios.Resultado r = servico.consultar(coord, ORIGEM, TipoRelatorio.EVOLUCAO, LocalDate.of(2026, 9, 30),
+                LocalDate.of(2026, 10, 6), null, null, null);
+        assertEquals(LocalDate.of(2026, 9, 23), r.comparacao().inicio());
+        assertEquals(LocalDate.of(2026, 9, 29), r.comparacao().fim());
+        assertEquals(168.0, r.comparacao().horasAtual());
+        assertEquals(168.0, r.comparacao().horasAnterior());
+        assertTrue(r.limitacoes().stream().anyMatch(l -> l.codigo().equals("PERIODOS_ENCERRADOS")));
+        assertTrue(r.limitacoes().stream().anyMatch(l -> l.codigo().equals("PERIODOS_EQUIVALENTES")
+                && l.texto().contains("mesma duração (168 h)")));
         assertEquals(Set.of("ATUAL", "ANTERIOR"), Set.copyOf(r.linhas().stream().map(LinhaRelatorio::periodo).toList()));
         assertTrue(r.limitacoes().stream().anyMatch(l -> l.codigo().equals("ALERTAS_NAO_COMPARADOS")));
         assertTrue(r.limitacoes().stream().anyMatch(l -> l.codigo().equals("REGRAS_ALTERADAS") && l.texto().startsWith("2 ")));
         assertEquals(1, banco.transacoes, "os dois períodos no MESMO instantâneo (uma transação)");
+    }
+
+    /** Revisão do PR #11, ponto 3: hoje ao meio-dia × ontem inteiro não é comparável. */
+    @Test
+    void evolucaoSoComPeriodosEncerradosNoFusoDaUnidade() {
+        // 12:00 em Fortaleza (UTC−3): hoje = 07/10 → o fim pode ser no máximo 06/10.
+        RegraVioladaException e = assertThrows(RegraVioladaException.class, () -> servico.consultar(coord, ORIGEM,
+                TipoRelatorio.EVOLUCAO, HOJE.minusDays(6), HOJE, null, null, null));
+        assertEquals("PERIODO_INCOMPLETO", e.codigo());
+        assertTrue(e.getMessage().contains("2026-10-06") && e.getMessage().contains("America/Fortaleza"), e.getMessage());
+        assertEquals(0, banco.periodosPedidos.size(), "nada calculado");
+        // Fronteira da meia-noite LOCAL: 02:59:59Z de 08/10 ainda é 07/10 em Fortaleza (fim 07/10 recusado)...
+        relogio.agora = Instant.parse("2026-10-08T02:59:59Z");
+        assertEquals("PERIODO_INCOMPLETO", assertThrows(RegraVioladaException.class, () -> servico.consultar(coord, ORIGEM,
+                TipoRelatorio.EVOLUCAO, HOJE, HOJE, null, null, null)).codigo());
+        // ...e 03:00:00Z já é 08/10 local: o dia 07/10 está encerrado. Em UTC seria outro resultado.
+        relogio.agora = Instant.parse("2026-10-08T03:00:00Z");
+        ServicoRelatorios.Resultado r = servico.consultar(coord, ORIGEM, TipoRelatorio.EVOLUCAO, HOJE, HOJE, null, null, null);
+        assertEquals(HOJE.minusDays(1), r.comparacao().inicio());
+        // Os outros relatórios continuam podendo incluir hoje (estoque atual).
+        assertEquals(HOJE.plusDays(1), servico.consultar(coord, ORIGEM, TipoRelatorio.RESUMO, HOJE.plusDays(1),
+                HOJE.plusDays(1), null, null, null).fim());
+    }
+
+    @Test
+    void evolucaoExplicitaDiferencaDeDuracaoPorHorarioDeVerao() {
+        banco.fuso = "America/New_York";   // horário de verão termina em 01/11/2026 (dia local de 25 h)
+        relogio.agora = Instant.parse("2026-11-10T15:00:00Z");
+        ServicoRelatorios.Resultado r = servico.consultar(coord, ORIGEM, TipoRelatorio.EVOLUCAO, LocalDate.of(2026, 11, 1),
+                LocalDate.of(2026, 11, 1), null, null, null);
+        assertEquals(25.0, r.comparacao().horasAtual());
+        assertEquals(24.0, r.comparacao().horasAnterior());
+        assertTrue(r.limitacoes().stream().anyMatch(l -> l.codigo().equals("PERIODOS_EQUIVALENTES")
+                && l.texto().contains("atual 25 h, anterior 24 h")), "mesmo nº de dias locais, durações diferentes");
+    }
+
+    /** Revisão do PR #11, ponto 4: definições e limitações vão no próprio resultado assinado. */
+    @Test
+    void definicoesRelevantesNoResultadoENaAssinatura() {
+        for (TipoRelatorio t : TipoRelatorio.values()) {
+            LocalDate fim = t == TipoRelatorio.EVOLUCAO ? HOJE.minusDays(1) : HOJE;
+            ServicoRelatorios.Resultado r = servico.consultar(coord, ORIGEM, t, fim.minusDays(2), fim, null, null, null);
+            Set<String> codigos = Set.copyOf(r.definicoes().stream().map(d -> d.codigo()).toList());
+            assertEquals(Set.copyOf(r.verbetes().values()), codigos, t + ": uma definição por verbete referenciado");
+            r.definicoes().forEach(d -> {
+                assertFalse(d.formula().isBlank());
+                assertFalse(d.populacao().isBlank());
+                assertFalse(d.unidadeMedida().isBlank());
+                assertTrue(d.situacao().startsWith("PROPOSTA"));
+            });
+        }
+        ServicoRelatorios.Resultado ev = servico.consultar(coord, ORIGEM, TipoRelatorio.EVOLUCAO, HOJE.minusDays(7),
+                HOJE.minusDays(1), null, null, null);
+        assertEquals("PERMANENCIA", ev.verbetes().get("PERMANENCIA"));
+        assertEquals("ENCERRADAS", ev.verbetes().get("PENDENCIAS_ENCERRADAS"));
+        assertTrue(ev.definicoes().stream().anyMatch(d -> d.codigo().equals("PERMANENCIA")
+                && d.exclusoes().contains("encerramento administrativo")));
+        assertTrue(ev.definicoes().stream().anyMatch(d -> d.codigo().equals("ENCERRADAS")
+                && d.campoTemporal().contains("ÚLTIMO prazo")));
+        assertTrue(ev.definicoes().stream().anyMatch(d -> d.codigo().equals("EVOLUCAO")
+                && d.formula().contains("pontos percentuais")));
+        assertTrue(ev.limitacoes().stream().anyMatch(l -> l.codigo().equals("PERMANENCIA_SEM_ADMINISTRATIVO")
+                && "PERMANENCIA".equals(l.secao())));
+        assertTrue(ev.limitacoes().stream().anyMatch(l -> l.codigo().equals("PRAZO_ULTIMO")
+                && "PENDENCIAS_ENCERRADAS".equals(l.secao())));
+        assertTrue(ev.limitacoes().stream().anyMatch(l -> l.codigo().equals("UNIDADES_DA_VARIACAO")));
+        // Mesmo conjunto, mesmo instante: mesma assinatura; as definições entram na forma canônica.
+        assertEquals(ev.assinatura(), servico.consultar(coord, ORIGEM, TipoRelatorio.EVOLUCAO, HOJE.minusDays(7),
+                HOJE.minusDays(1), null, null, null).assinatura());
+        ServicoRelatorios.Resultado direcaoQ = servico.consultar(direcao, ORIGEM, TipoRelatorio.PENDENCIAS, HOJE, HOJE, null,
+                null, null);
+        assertFalse(direcaoQ.definicoes().toString().contains("Paciente"), "definições sem dado nominal");
+    }
+
+    @Test
+    void qualidadeSinalizaFatosSemSetorDaEpoca() {
+        banco.linhas = new ArrayList<>(List.of(linha("SETOR_NAO_ATRIBUIDO", "REGISTROS", 2L, null),
+                linha("SETOR_NAO_ATRIBUIDO", "BLOQUEIOS_INICIADOS", 1L, null)));
+        ServicoRelatorios.Resultado r = servico.consultar(coord, ORIGEM, TipoRelatorio.QUALIDADE, HOJE, HOJE, SETOR, null, null);
+        assertTrue(r.limitacoes().stream().anyMatch(l -> l.codigo().equals("SETOR_NAO_ATRIBUIDO") && l.texto().startsWith("3 ")
+                && l.texto().contains("não foram atribuídos ao setor atual")));
+        assertTrue(r.limitacoes().stream().anyMatch(l -> l.codigo().equals("REGISTRO_X_FATO")));
+        assertTrue(r.limitacoes().stream().anyMatch(l -> l.codigo().equals("ESCOPO_LINHA_DO_TEMPO")
+                && "LINHA_DO_TEMPO".equals(l.secao())));
+        ServicoRelatorios.Resultado sem = servico.consultar(coord, ORIGEM, TipoRelatorio.QUALIDADE, HOJE, HOJE, null, null, null);
+        assertTrue(sem.limitacoes().stream().noneMatch(l -> l.codigo().equals("SETOR_NAO_ATRIBUIDO")));
     }
 
     @Test

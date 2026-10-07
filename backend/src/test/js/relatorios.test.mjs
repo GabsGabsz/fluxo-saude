@@ -16,7 +16,7 @@ function resultado(tipo, linhas, extra = {}) {
     fuso: 'America/Fortaleza', inicio: '2026-10-01', fim: '2026-10-07', inicioEm: '2026-10-01T03:00:00Z', fimEm: '2026-10-08T03:00:00Z',
     referencia: '2026-10-07T15:00:00Z', geradoEm: '2026-10-07T15:00:01Z', filtros: { setor: null, etapa: null, categoria: null },
     comparacao: null, linhas, listaPendencias: { disponivel: false, motivo: null, limite: 2000, itens: [] }, limitacoes: [],
-    cobertura: 'Operação registrada pela equipe.', verbetes: {}, assinatura: 'ab'.repeat(32), comprovante: 'carga.mac', ...extra,
+    cobertura: 'Operação registrada pela equipe.', verbetes: {}, definicoes: [], assinatura: 'ab'.repeat(32), comprovante: 'carga.mac', ...extra,
   };
 }
 
@@ -58,6 +58,45 @@ test('CSV: metadados, linhas, lista nominal protegida e limitações — o mesmo
   const direcao = rel.gerarCsv(resultado('PENDENCIAS', [], { listaPendencias: { disponivel: false,
     motivo: 'Perfil sem acesso nominal: só agregados.', limite: 2000, itens: [] } }));
   assert.ok(direcao.includes('Perfil sem acesso nominal') && !direcao.includes('Paciente'));
+});
+
+// Definição como o servidor a devolve DENTRO do resultado (DefinicaoIndicador).
+const DEF = (codigo, extra = {}) => ({ codigo, nome: `Nome ${codigo}`, requisitos: 'issue #9', finalidade: 'f', formula: `fórmula ${codigo}`,
+  unidadeMedida: 'minutos', populacao: `população ${codigo}`, exclusoes: '—', denominador: 'n', marcoInicial: 'a', marcoFinal: 'b',
+  campoTemporal: 'c', abertosEEncerrados: 'd', dadosAusentes: 'e', repeticoes: 'r', periodoEFronteiras: 'p',
+  situacao: 'PROPOSTA — V-09', ...extra });
+
+function evolucao() {
+  return resultado('EVOLUCAO', [
+    L('PERMANENCIA', null, { periodo: 'ANTERIOR', quantidade: 2, mediana: 300 }), L('PERMANENCIA', null, { periodo: 'ATUAL', quantidade: 3, mediana: 660 }),
+    L('PENDENCIAS_ENCERRADAS', null, { periodo: 'ANTERIOR', quantidade: 4, parte: 2, base: 4 }),
+    L('PENDENCIAS_ENCERRADAS', null, { periodo: 'ATUAL', quantidade: 4, parte: 3, base: 4 })], {
+    comparacao: { inicio: '2026-09-23', fim: '2026-09-29', inicioEm: 'x', fimEm: 'y', horasAnterior: 168, horasAtual: 168 },
+    inicio: '2026-09-30', fim: '2026-10-06',
+    verbetes: { EVOLUCAO: 'EVOLUCAO', PERMANENCIA: 'PERMANENCIA', PENDENCIAS_ENCERRADAS: 'ENCERRADAS' },
+    definicoes: [DEF('EVOLUCAO', { formula: 'variação absoluta em pontos percentuais para métricas em %' }),
+      DEF('PERMANENCIA', { exclusoes: 'Desfecho "encerramento administrativo" — proposta' }),
+      DEF('ENCERRADAS', { campoTemporal: '"No prazo" usa o ÚLTIMO prazo registrado.', formula: '=HYPERLINK("x") definição' })],
+    limitacoes: [{ codigo: 'PRAZO_ULTIMO', secao: 'PENDENCIAS_ENCERRADAS', texto: '"Até o prazo" usa o ÚLTIMO prazo' },
+      { codigo: 'PERMANENCIA_SEM_ADMINISTRATIVO', secao: 'PERMANENCIA', texto: 'Permanência exclui encerramento administrativo' },
+      { codigo: 'PERIODOS_ENCERRADOS', secao: null, texto: 'Só períodos encerrados' }],
+  });
+}
+
+test('CSV leva as definições e limitações do PRÓPRIO resultado, protegidas contra fórmulas, e as unidades das variações', () => {
+  const csv = rel.gerarCsv(evolucao());
+  assert.ok(csv.includes('"Definições (relatorios-v1)";"Nome";"Fórmula";"Unidade de medida";"População";"Exclusões";"Denominador"'));
+  assert.ok(csv.includes('"PERMANENCIA";"Nome PERMANENCIA";"fórmula PERMANENCIA";"minutos";"população PERMANENCIA";'
+    + '"Desfecho ""encerramento administrativo"" — proposta"'), 'exclusão da permanência no CSV');
+  assert.ok(csv.includes('"""No prazo"" usa o ÚLTIMO prazo registrado."'), 'último prazo no CSV');
+  assert.ok(csv.includes(`"'=HYPERLINK(""x"") definição"`), 'texto novo semelhante a fórmula também protegido');
+  assert.ok(csv.includes('"PRAZO_ULTIMO";"PENDENCIAS_ENCERRADAS"') && csv.includes('"PERMANENCIA_SEM_ADMINISTRATIVO";"PERMANENCIA"'));
+  assert.ok(csv.includes('"Variação absoluta";"Variação relativa (%)";"Unidade do valor";"Unidade da variação absoluta"'));
+  assert.ok(/"% encerradas até o \(último\) prazo";50;75;25;"não se aplica";"percentual \(%\)";"pontos percentuais \(p\.p\.\)";"ENCERRADAS"/.test(csv),
+    'métrica em %: variação em p.p., relativa não se aplica');
+  assert.ok(/"Permanência mediana[^"]*";300;660;360;120;"minutos";"minutos";"PERMANENCIA"/.test(csv));
+  assert.ok(csv.includes('mesma duração: 168 h') && csv.includes('só períodos encerrados'));
+  assert.ok(csv.includes(';"PERMANENCIA"\r\n'), 'linhas de dados indicam a definição (código) que as explica');
 });
 
 test('evolução: variação absoluta e percentual; base anterior zero não divide', () => {
@@ -158,4 +197,66 @@ test('exportação: registra no servidor ANTES de gerar; CSV = resultado exibido
   await esperar(); await esperar();
   assert.equal(baixados.length, 1, 'registro recusado: nenhum arquivo');
   assert.match(textoDe(raiz), /recusado|erro/i);
+});
+
+// ------------------------------------------------------------------ revisão do PR #11 (pontos 3 e 4)
+test('versão imprimível da Evolução traz definições e limitações mesmo se o dicionário separado falhar', async () => {
+  const r = evolucao();
+  const c = contexto(r, []);
+  c.api.obter = async (url) => { if (url.startsWith('/api/relatorios/dicionario')) throw new Error('dicionário indisponível'); return r; };
+  const raiz = new No('main');
+  montar(raiz, c);
+  await calcular(raiz, 'EVOLUCAO');
+  const artigo = raiz.todos((n) => n.getAttribute('aria-label') === 'Relatório')[0];
+  assert.ok(artigo, 'relatório desenhado');
+  const t = artigo.textContent;   // o artigo é o que se imprime (filtros e dicionário ficam fora da impressão)
+  for (const esperado of ['Desfecho "encerramento administrativo"', '"No prazo" usa o ÚLTIMO prazo registrado.',
+    'Permanência exclui encerramento administrativo', '"Até o prazo" usa o ÚLTIMO prazo', 'pontos percentuais (p.p.)',
+    'não se aplica', 'Definições das métricas comparadas', 'mesma duração: 168 h', 'População', 'Denominador']) {
+    assert.ok(t.includes(esperado), `impressão contém: ${esperado}`);
+  }
+  const defs = artigo.todos((n) => n.getAttribute('data-definicao'));
+  assert.deepEqual(defs.map((d) => d.getAttribute('data-definicao')), ['EVOLUCAO', 'PERMANENCIA', 'ENCERRADAS']);
+  const ocultos = artigo.todos((n) => String(n.getAttribute('class') || '').includes('nao-imprimir'));
+  assert.ok(!ocultos.some((n) => n.textContent.includes('ÚLTIMO prazo registrado')), 'definições fora de bloco oculto na impressão');
+  assert.match(textoDe(raiz), /dicionário indisponível|erro/i, 'falha do dicionário aparece só no material complementar');
+});
+
+test('seções das demais telas usam a definição do resultado, não o dicionário', async () => {
+  const r = resultado('QUALIDADE', [L('REGISTROS_RETROATIVOS', null, { quantidade: 2, parte: 1, base: 2 })], {
+    verbetes: { REGISTROS_RETROATIVOS: 'REGISTROS_RETROATIVOS' },
+    definicoes: [DEF('REGISTROS_RETROATIVOS', { populacao: 'setor em vigor no INSTANTE DO FATO' })] });
+  const c = contexto(r, []);
+  c.api.obter = async (url) => (url.startsWith('/api/relatorios/dicionario') ? { versao: 'outra', definicoes: [DEF('REGISTROS_RETROATIVOS',
+    { populacao: 'TEXTO DO DICIONÁRIO SEPARADO' })] } : r);
+  const raiz = new No('main');
+  montar(raiz, c);
+  await calcular(raiz, 'QUALIDADE');
+  const secao = raiz.todos((n) => n.getAttribute('data-secao') === 'REGISTROS_RETROATIVOS')[0];
+  assert.match(secao.textContent, /setor em vigor no INSTANTE DO FATO/);
+  assert.doesNotMatch(secao.textContent, /DICIONÁRIO SEPARADO/);
+  assert.equal(raiz.todos((n) => n.getAttribute('data-secao') === 'SETOR_NAO_ATRIBUIDO').length, 0,
+    'sem filtro de setor, a seção de fatos sem setor não aparece');
+});
+
+test('Evolução: formulário só aceita período encerrado (fim até ontem) e explica; os outros relatórios incluem hoje', () => {
+  const raiz = new No('main');
+  montar(raiz, contexto(resultado('RESUMO', []), []));   // "agora" = 07/10/2026 12:00 em Fortaleza
+  const form = raiz.todos((n) => n.tagName === 'form')[0];
+  const [tipo] = form.todos((n) => n.tagName === 'select');
+  const [inicio, fim] = form.todos((n) => n.tagName === 'input' && n.getAttribute('type') === 'date');
+  const aviso = raiz.todos((n) => n.getAttribute('id') === 'aviso-evolucao')[0];
+  assert.equal(fim.value, '2026-10-07');
+  assert.equal(aviso.hidden, true);
+  tipo.value = 'EVOLUCAO';
+  tipo.ouvintes.change[0]();
+  assert.equal(fim.value, '2026-10-06', 'fim ajustado para ontem');
+  assert.equal(fim.max, '2026-10-06');
+  assert.ok(inicio.value <= fim.value);
+  assert.equal(aviso.hidden, false);
+  assert.match(aviso.textContent, /períodos ENCERRADOS.*06\/10\/2026.*America\/Fortaleza/s);
+  tipo.value = 'RESUMO';
+  tipo.ouvintes.change[0]();
+  assert.equal(fim.max, '2026-10-07', 'demais relatórios podem terminar hoje');
+  assert.equal(aviso.hidden, true);
 });
