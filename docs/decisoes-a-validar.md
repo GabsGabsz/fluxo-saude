@@ -38,6 +38,11 @@ unidade**, não regras fixas (RN-014, Anexo B.3). Cada item indica a validação
 | 31 | Ordem do painel de travados: limite atingido há mais tempo primeiro (critério operacional, não prioridade clínica) | `ServicoAlertas` | V-05 |
 | 32 | Escalonamento e notificações direcionadas **não implementados**: aguardam níveis, destinatários e tempos | — | V-05, V-06 |
 | 33 | A ciência vale para a versão da regra que o profissional viu: se o Administrador alterar limite ou ação esperada, a ciência anterior não vale para a nova versão e a tela precisa ser relida (409) | V14 | V-06 |
+| 34 | Interface: atualização automática a cada **30 s**, pausada enquanto há edição; falha de conexão mantém a lista e mostra "dados podem estar desatualizados" | `nucleo/atualizador.js`, telas | V-10 |
+| 35 | A Torre exibe até **300** casos pela ordenação escolhida (aviso de lista truncada; refinar filtros) | `telas/torre.js` | V-10 |
+| 36 | A unidade ativa é da **sessão** (compartilhada entre abas do mesmo navegador): trocar numa aba recarrega as outras; requisição de aba desatualizada é recusada (409) | `InterceptadorSessao`, `main.js` | V-10 |
+| 37 | "Prazo expirado" no detalhe da pendência é só informação (relógio do servidor); alerta formal depende de regra `PENDENCIA_VENCIDA` configurada | `telas/episodio.js` | V-05 |
+| 38 | Navegadores suportados: versões atuais de Chrome, Edge, Firefox e Safari (ES modules); sem modo offline por segurança | ADR-0008 | V-10 |
 | 25 | **Limitação conhecida:** o contexto da transação (GUCs) pode ser definido pelo próprio papel da aplicação; as regras do banco não resistem a SQL arbitrário como `fluxo_app`. Proposta: contexto não forjável (etapa própria, afeta todas as políticas) | V1/V8 | V-10 |
 
 **Não decidido, e não deve ser decidido pelo desenvolvedor:** limites de alerta e SLA por etapa
