@@ -16,8 +16,12 @@ public interface RepositorioIndicadores {
     record Periodo(Instant inicio, Instant fim) {
     }
 
-    /** Estatística de durações em minutos: média/mediana nulas quando não há dados. */
-    record Duracoes(long incluidos, long semDados, Double mediaMin, Double medianaMin, Double minimoMin, Double maximoMin) {
+    /**
+     * Estatística de durações em minutos: média/mediana nulas quando não há dados (nunca zero).
+     * {@code naoIncluidos}: na permanência, os excluídos (encerramento administrativo); nos tempos de
+     * transferência, os episódios sem o marco inicial registrado (dado ausente).
+     */
+    record Duracoes(long incluidos, long naoIncluidos, Double mediaMin, Double medianaMin, Double minimoMin, Double maximoMin) {
     }
 
     record AcimaDoLimite(UUID regraId, String regraNome, int regraVersao, long limiteMin, long populacao, long acima) {
