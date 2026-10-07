@@ -1,6 +1,6 @@
 # ADR-0010 — Relatórios gerenciais
 
-- **Status:** proposto (PR da etapa 8), implementado em `V19` e no módulo `relatorio`
+- **Status:** proposto (PR #11 da etapa 8), implementado em `V19`, `V20` e no módulo `relatorio`; revisado no PR #11 (seção 8)
 - **Data:** 2026-10-07
 - **Origem:** **extensão aprovada do projeto** (issue #9). Não é requisito da ERS v1.1 original.
   Reaproveita definições da etapa 7 (RF-019, RF-020, RF-039 — [ADR-0009](0009-plantao-e-indicadores.md)).
@@ -161,6 +161,62 @@ impressão, e listadas no CSV. Entre elas:
 - campo opcional;
 - critério de atualidade não configurado.
 
+### 8. Revisão do PR #11 (V20 e `relatorios-v2`)
+
+**8.1 Qualidade pelo setor da época.** Na V19, `rel_qualidade` filtrava registros e bloqueios iniciados
+pelo setor **atual/final** do episódio: um fato ocorrido em S1 passava para S2 depois de uma
+transferência. A V20 (nova migração; a V19 não é reescrita) substitui a função:
+
+- **Registros retroativos:** o período é o do **registro** (`registrado_em`); com filtro de setor, cada
+  registro vai para o setor em vigor no instante do **fato** (`ocorrido_em`), pela ordem da linha do tempo
+  `(ocorrido_em, registrado_em, id)`. A transferência pertence ao setor de destino.
+- **Bloqueios iniciados:** com filtro de setor, vale o setor em vigor no início do intervalo (uma
+  transferência no mesmo instante prevalece, como nos pedaços de Gargalos).
+- **Sem setor determinável** (fato anterior ao primeiro evento de setor, ex.: registro legado sem evento
+  de abertura): o fato fica **fora** do filtro e é contado em `SETOR_NAO_ATRIBUIDO`, com limitação. Nunca
+  é atribuído ao setor atual.
+- **Estoque** (atualidade, causa em investigação, cobertura de campos) continua pelo setor atual. A
+  cobertura `LINHA_DO_TEMPO` tem escopo e filtro próprios, documentados (setor atual/final, porque
+  justamente falta a linha do tempo).
+- **Desempenho:** a atribuição é feita por funções de janela (último evento de setor até o fato), sem
+  junção por faixa. Uma junção por faixa sobre o CTE caía em *nested loop* (6,4 s em 366 dias / 20 mil
+  episódios); com a janela, ≈ 0,8 s.
+
+**8.2 Bloqueios pela definição normalizada.** Mudar só o detalhe emite `BLOQUEIO_DEFINIDO` com o mesmo
+motivo e o início original. Qualidade passou a contar os **inícios dos intervalos** de `rel_intervalos`,
+a mesma definição de Gargalos e Evolução (`t17` confere as três concordando). Na mesma função, a
+categoria do intervalo passou a ser a registrada **no início** (antes, a menor entre as redefinições).
+
+**8.3 Evolução só com períodos encerrados.** Comparar um período que termina hoje (incompleto) com um
+anterior completo sugere melhora ou piora artificial.
+
+- O servidor recusa fim depois de ontem no fuso da unidade (422 `PERIODO_INCOMPLETO`), pelo relógio do
+  servidor. A tela ajusta as datas e explica a restrição.
+- Os demais relatórios podem incluir hoje.
+- A comparação continua por igual número de dias locais. A duração real dos dois períodos vai no
+  resultado (`horasAnterior`, `horasAtual`), e a diferença por horário de verão aparece na limitação
+  `PERIODOS_EQUIVALENTES`.
+- Alternativa descartada nesta entrega: recortes parciais equivalentes (ex.: até a mesma hora do dia),
+  mais complexos de explicar e validar.
+
+**8.4 Definições dentro do resultado.** O CSV não trazia as fórmulas, e a impressão da Evolução perdia
+as exclusões, porque o dicionário era uma consulta separada e não impressa.
+
+- O resultado passou a levar `definicoes`: um verbete por definição usada, para **todas** as seções do
+  relatório. Cada verbete traz versão, fórmula, unidade, população, exclusões, denominador, marcos,
+  ausentes, repetições e situação.
+- O resultado leva também `verbetes` (seção → definição).
+- Definições e verbetes entram na **forma canônica assinada**.
+- Tela, impressão e CSV usam essas definições, nunca o dicionário separado, que fica como material
+  complementar. A exportação continua sem recálculo.
+- Evolução:
+  - verbetes próprios: `PERMANENCIA`, com a exclusão do encerramento administrativo; `ENCERRADAS`, com
+    o último prazo;
+  - limitações `PERMANENCIA_SEM_ADMINISTRATIVO`, `PRAZO_ULTIMO` e `UNIDADES_DA_VARIACAO`;
+  - unidades explícitas: contagem, minutos ou pontos percentuais; a variação relativa não se aplica a
+    métricas em %.
+- Textos novos no CSV também passam pela proteção contra fórmulas.
+
 ## Alternativas consideradas
 
 - **Calcular a partir da página da Torre ou do estado atual:** rejeitado. Não cobre todos os
@@ -186,5 +242,5 @@ impressão, e listadas no CSV. Entre elas:
   registradas (V18).
 - **Responsável** é o atual, e **"no prazo"** usa o último prazo: o modelo não guarda o histórico
   desses campos.
-- **Fórmulas:** qualquer mudança exige nova versão do sistema (`relatorios-v1` no cabeçalho).
+- **Fórmulas:** qualquer mudança exige nova versão do sistema (versão no cabeçalho: `relatorios-v2` desde a revisão do PR #11).
 - A auditoria cresce com cada exportação e cada leitura nominal. A retenção é V-10.

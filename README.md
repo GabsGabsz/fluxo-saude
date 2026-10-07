@@ -10,7 +10,7 @@ As etapas 4 a 7 (gestão de usuários, alertas e "Pacientes travados", interface
 
 | Camada | Conteúdo | Verificação |
 |---|---|---|
-| Banco (PostgreSQL 16) | Esquema do núcleo, regras críticas em `CHECK`/triggers, RLS por unidade (inclusive usuários e auditoria), auditoria imutável com cadeia SHA-256, login por funções controladas, observações (V9), margem de relógio (V10), gestão de usuários só por funções com alcance conferido (V11), versão de credencial conferida em toda transação (V12), regras de alerta e ciência (V13), ciência só na versão da regra vista (V14), unidades do próprio usuário para a interface (V15), passagem de plantão e indicadores (V16), registro de leituras nominais da passagem (V17), histórico das versões das regras de alerta (V18), relatórios gerenciais sobre a linha do tempo (V19) | `backend/src/test/sql` — 21 suítes + 6 testes de concorrência |
+| Banco (PostgreSQL 16) | Esquema do núcleo, regras críticas em `CHECK`/triggers, RLS por unidade (inclusive usuários e auditoria), auditoria imutável com cadeia SHA-256, login por funções controladas, observações (V9), margem de relógio (V10), gestão de usuários só por funções com alcance conferido (V11), versão de credencial conferida em toda transação (V12), regras de alerta e ciência (V13), ciência só na versão da regra vista (V14), unidades do próprio usuário para a interface (V15), passagem de plantão e indicadores (V16), registro de leituras nominais da passagem (V17), histórico das versões das regras de alerta (V18), relatórios gerenciais sobre a linha do tempo (V19), qualidade pelo setor da época e bloqueios normalizados (V20) | `backend/src/test/sql` — 22 suítes + 6 testes de concorrência |
 | Domínio (Java 21, sem framework) | `Episodio`, `Pendencia`, `FluxoConfigurado`, ajuste manual de horário, pseudônimo, UUIDv7 | 45 testes JUnit, incl. o cenário completo da ERS §11 |
 | Identidade (núcleo puro) | Política de senha, limitadores, matriz de permissões, serviço de autenticação | `ServicoAutenticacaoTest`, `MatrizPermissoesTest`, ... |
 | Casos de uso (núcleo puro) | `ServicoEpisodios`, `ServicoPendencias`, `ServicoConsultas`: permissão na unidade ativa, versão lida (409), ajuste manual de horário, painel pseudonimizado | `ServicosDeAplicacaoTest` (portas em memória) |
@@ -163,8 +163,8 @@ Relatórios gerenciais (extensão aprovada, issue #9; `INDICADORES_VER`; lista n
 
 | Método | Caminho | Uso |
 |---|---|---|
-| GET | `/api/relatorios/{resumo\|gargalos\|pendencias\|evolucao\|qualidade}?inicio=&fim=&setor=&etapa=&categoria=` | relatório calculado num único instantâneo (etapa só em gargalos; categoria em gargalos e pendências); traz `assinatura` e `comprovante` |
-| GET | `/api/relatorios/dicionario` | definições das seções (`relatorios-v1`, fórmulas propostas) |
+| GET | `/api/relatorios/{resumo\|gargalos\|pendencias\|evolucao\|qualidade}?inicio=&fim=&setor=&etapa=&categoria=` | relatório calculado num único instantâneo (etapa só em gargalos; categoria em gargalos e pendências; evolução só com período encerrado — fim até ontem, senão 422 `PERIODO_INCOMPLETO`); traz `definicoes`, `assinatura` e `comprovante` |
+| GET | `/api/relatorios/dicionario` | dicionário geral (`relatorios-v2`, fórmulas propostas) — complementar: cada relatório já traz as `definicoes` que usou |
 | POST | `/api/relatorios/exportacoes` | `{comprovante, formato: CSV\|IMPRESSAO}` → registra a exportação na auditoria (**201**); comprovante inválido → 422 `COMPROVANTE_INVALIDO`; calculado há mais de 2 h → 409 `RELATORIO_EXPIRADO` |
 
 | GET | `/api/catalogo` | configuração da unidade ativa para a interface: setores, etapas, transições, motivos, especialidades, profissionais (só para quem vê episódios ou gere usuários) |
@@ -244,7 +244,7 @@ backend/
     plantao/ indicador/   passagem de plantão e indicadores (mesma divisão)
     relatorio/            relatórios gerenciais (mesma divisão)
     configuracao/         Spring (relógio, segurança, montagem dos módulos)
-  src/main/resources/db/migration/   V1..V19 (Flyway)
+  src/main/resources/db/migration/   V1..V20 (Flyway)
   src/main/resources/static/         interface web (index.html, app/css, app/js/nucleo, app/js/telas)
   src/test/java/          testes de domínio, arquitetura e integração
   src/test/sql/           testes das garantias do banco
