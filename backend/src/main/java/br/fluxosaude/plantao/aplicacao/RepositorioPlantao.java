@@ -32,7 +32,8 @@ public interface RepositorioPlantao {
      * novos, inativados ou ainda fora do catálogo carregado pela tela apareçam corretamente.
      */
     record Nomes(Map<UUID, String> pacientes, Map<UUID, String> pendencias, Map<UUID, String> setores,
-                 Map<UUID, String> etapas, Map<UUID, String> motivos, Map<UUID, String> profissionais) {
+                 Map<UUID, String> etapas, Map<UUID, String> motivos, Map<UUID, String> profissionais,
+                 Map<RegraVersaoId, RegraNaVersao> regrasPorVersao, Map<UUID, RegraAtual> regrasAtuais) {
         public Nomes {
             pacientes = Map.copyOf(pacientes);
             pendencias = Map.copyOf(pendencias);
@@ -40,13 +41,32 @@ public interface RepositorioPlantao {
             etapas = Map.copyOf(etapas);
             motivos = Map.copyOf(motivos);
             profissionais = Map.copyOf(profissionais);
+            regrasPorVersao = Map.copyOf(regrasPorVersao);
+            regrasAtuais = Map.copyOf(regrasAtuais);
         }
+    }
+
+    /** Uma versão de uma regra de alerta (a gravada no alerta da passagem). */
+    record RegraVersaoId(UUID regraId, int versao) {
+    }
+
+    /**
+     * Dados DAQUELA versão da regra (histórico imutável, V18): nunca os da configuração atual. Ausente
+     * do mapa = versão anterior ao histórico (detalhes indisponíveis).
+     */
+    record RegraNaVersao(UUID regraId, int versao, String nome, String tipo, Long limiteMinutos, String acaoEsperada,
+                         boolean ativa) {
+    }
+
+    /** Situação ATUAL da regra (para dizer, junto do alerta histórico, se ela mudou ou foi desativada). */
+    record RegraAtual(UUID regraId, int versao, boolean ativa) {
     }
 
     /** Identificadores cujos nomes/rótulos serão exibidos. */
     record Referencias(Set<UUID> episodios, Set<UUID> pendencias, Set<UUID> setores, Set<UUID> etapas,
-                       Set<UUID> motivos, Set<UUID> profissionais) {
+                       Set<UUID> motivos, Set<UUID> profissionais, Set<RegraVersaoId> regras) {
         public Referencias {
+            regras = Set.copyOf(regras);
             episodios = Set.copyOf(episodios);
             pendencias = Set.copyOf(pendencias);
             setores = Set.copyOf(setores);

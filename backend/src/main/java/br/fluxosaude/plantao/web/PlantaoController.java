@@ -38,8 +38,24 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/api/plantao")
 class PlantaoController {
 
+    /**
+     * Um alerta como está no conteúdo. {@code regra}: dados DA VERSÃO {@code regraVersao} (histórico
+     * imutável), ou nulo quando essa versão é anterior ao histórico (a tela diz "indisponível" — nunca
+     * usa a configuração atual no lugar). {@code regraAtual}: situação de hoje da regra (versão
+     * vigente e se está ativa), só para indicar que ela mudou ou foi desativada depois.
+     */
     record AlertaDto(UUID regraId, int regraVersao, String tipo, Instant referenciaEm, Instant atingidoEm,
-                     UUID pendenciaId) {
+                     UUID pendenciaId, String pendenciaDescricao, RegraVersaoDto regra, RegraAtualDto regraAtual) {
+    }
+
+    record RegraVersaoDto(String nome, Long limiteMinutos, String acaoEsperada, boolean ativa) {
+    }
+
+    record RegraAtualDto(int versao, boolean ativa) {
+    }
+
+    /** Um alerta do caso entre a entrega e agora: ADICIONADO, REMOVIDO, ALTERADO ou MANTIDO. */
+    record AlertaMudancaDto(String tipo, List<String> campos, AlertaDto entregue, AlertaDto atual) {
     }
 
     /** {@code responsavelNome}: nome do profissional ou do setor responsável (estado atual do cadastro). */
@@ -60,7 +76,7 @@ class PlantaoController {
      * pendências do caso vêm comparadas uma a uma em {@link PendenciaDiferencaDto}.
      */
     record CasoDiferencaDto(String tipo, UUID episodioId, String pacienteNome, List<String> campos, CasoDto entregue,
-                            CasoDto atual) {
+                            CasoDto atual, List<AlertaMudancaDto> alertas) {
     }
 
     /** Uma pendência que mudou desde a entrega, sempre vinculada ao seu caso ({@code episodioId}). */
@@ -157,7 +173,10 @@ class PlantaoController {
             List<CasoDiferencaDto> casos = c.casos().stream()
                     .map(x -> new CasoDiferencaDto(x.tipo().name(), x.episodioId(), n.pacientes().get(x.episodioId()),
                             x.campos().stream().map(Enum::name).toList(), semPendencias(x.entregue(), n),
-                            semPendencias(x.atual(), n)))
+                            semPendencias(x.atual(), n),
+                            x.alertas().stream().map(a -> new AlertaMudancaDto(a.tipo().name(),
+                                    a.campos().stream().map(Enum::name).toList(), alerta(a.entregue(), n),
+                                    alerta(a.atual(), n))).toList()))
                     .toList();
             List<PendenciaDiferencaDto> pendencias = c.pendencias().stream()
                     .map(x -> new PendenciaDiferencaDto(x.tipo().name(), x.id(), x.episodioId(),
@@ -217,9 +236,21 @@ class PlantaoController {
                 c.motivoId() == null ? null : nomes.motivos().get(c.motivoId()),
                 c.categoria() == null ? null : c.categoria().name(), c.bloqueioDesde(), c.entradaEm(), c.etapaDesde(),
                 c.critico(), c.transferencia(),
-                c.alertas().stream().map(a -> new AlertaDto(a.regraId(), a.regraVersao(), a.tipo().name(), a.referenciaEm(),
-                        a.atingidoEm(), a.pendenciaId())).toList(),
+                c.alertas().stream().map(a -> alerta(a, nomes)).toList(),
                 comPendencias ? c.pendencias().stream().map(p -> pendencia(p, nomes)).collect(Collectors.toList()) : List.of());
+    }
+
+    private static AlertaDto alerta(ConteudoPassagem.AlertaPassagem a, RepositorioPlantao.Nomes nomes) {
+        if (a == null) {
+            return null;
+        }
+        RepositorioPlantao.RegraNaVersao v = nomes.regrasPorVersao()
+                .get(new RepositorioPlantao.RegraVersaoId(a.regraId(), a.regraVersao()));
+        RepositorioPlantao.RegraAtual atual = nomes.regrasAtuais().get(a.regraId());
+        return new AlertaDto(a.regraId(), a.regraVersao(), a.tipo().name(), a.referenciaEm(), a.atingidoEm(), a.pendenciaId(),
+                a.pendenciaId() == null ? null : nomes.pendencias().get(a.pendenciaId()),
+                v == null ? null : new RegraVersaoDto(v.nome(), v.limiteMinutos(), v.acaoEsperada(), v.ativa()),
+                atual == null ? null : new RegraAtualDto(atual.versao(), atual.ativa()));
     }
 
     private static PendenciaDto pendencia(ConteudoPassagem.PendenciaPassagem p, RepositorioPlantao.Nomes nomes) {

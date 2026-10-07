@@ -41,6 +41,8 @@ class PlantaoIT extends IntegracaoBase {
     static UUID setorR1;
     static UUID unidadeA;
     static UUID setorA;
+    static UUID unidadeL;
+    static UUID setorL;
     private static final AtomicBoolean PREPARADO = new AtomicBoolean();
 
     @Autowired
@@ -78,6 +80,12 @@ class PlantaoIT extends IntegracaoBase {
                 setorR1 = setor(c, unidadeR, "OBS_R", "Observacao R");
                 usuario(c, "enf.r.plantao", "Enfermagem R", hash, unidadeR, "ENFERMAGEM");
                 usuario(c, "med.r.plantao", "Medicina R", hash, unidadeR, "MEDICO");
+                // L: alertas no recebimento (regras trocadas, alteradas e desativadas depois da entrega).
+                unidadeL = unidade(c, "UPA_PLANT_L", "UPA Plantao L");
+                setorL = setor(c, unidadeL, "OBS_L", "Observacao L");
+                usuario(c, "adm.l.plantao", "Administracao L", hash, unidadeL, "ADMINISTRADOR");
+                usuario(c, "enf.l.plantao", "Enfermagem L", hash, unidadeL, "ENFERMAGEM");
+                usuario(c, "med.l.plantao", "Medicina L", hash, unidadeL, "MEDICO");
                 unidadeA = unidade(c, "UPA_PLANT_A", "UPA Plantao A");
                 setorA = setor(c, unidadeA, "OBS_A", "Observacao A");
                 usuario(c, "enf.a.plantao", "Enfermagem A", hash, unidadeA, "ENFERMAGEM");
@@ -462,6 +470,132 @@ class PlantaoIT extends IntegracaoBase {
         assertEquals(unidadeQ, regs.get(0).unidade(), "registro na unidade de quem leu");
         List<String> daOutra = conjunto(unidadeQ, texto(json.readTree(regs.get(0).dados()).get("conjunto")));
         assertFalse(daOutra.contains(ep1) || daOutra.contains(ep2) || daOutra.contains(ep3), "nada da unidade A");
+    }
+
+    /**
+     * Revisão do PR #10 (alertas no recebimento): a assinatura cobre os alertas do conteúdo atual,
+     * então o detalhe identifica cada alerta — qual saiu, qual entrou, qual mudou de versão —, com os
+     * dados DA VERSÃO de cada regra (nunca os da configuração atual no lugar dos entregues) e a
+     * situação atual da regra à parte. Mudança depois da leitura → 409 sem gravar nada.
+     */
+    @Test
+    void recebimentoIdentificaCadaAlertaComARegraNaVersaoDoAlerta() throws Exception {
+        ClienteHttp adm = cliente("adm.l.plantao");
+        ClienteHttp enf = cliente("enf.l.plantao");
+        ClienteHttp med = cliente("med.l.plantao");
+        java.time.Instant agora = java.time.Instant.now().truncatedTo(java.time.temporal.ChronoUnit.SECONDS);
+        java.time.Instant entrada = agora.minusSeconds(3 * 3600);
+        String ep = texto(json.readTree(exigir(201, enf.enviar("POST", "/api/episodios",
+                "{\"novoPaciente\":{\"nome\":\"Paciente Ficticio Alertas\"},\"setorId\":\"" + setorL
+                + "\",\"momento\":{\"ocorridoEm\":\"" + entrada + "\",\"justificativaAjuste\":\"Registro tardio do teste\"}}"))
+                .body()).get("id"));
+        String a = regra(adm, "{\"nome\":\"Permanencia longa (A)\",\"tipo\":\"TEMPO_TOTAL\",\"limiteMinutos\":60,"
+                + "\"acaoEsperada\":\"Avisar coordenacao\"}");
+        String c = regra(adm, "{\"nome\":\"Permanencia em atraso (C)\",\"tipo\":\"TEMPO_TOTAL\",\"limiteMinutos\":30,"
+                + "\"acaoEsperada\":\"Rever conduta\"}");
+
+        // ---------------------------------------------------------------- entrega com A e C
+        JsonNode previa = json.readTree(exigir(200, enf.enviar("GET", "/api/plantao/previa", null)).body());
+        assertEquals(2, previa.get("casos").get(0).get("alertas").size());
+        String id = texto(json.readTree(exigir(201, enf.enviar("POST", "/api/plantao/passagens",
+                "{\"assinatura\":\"" + texto(previa.get("assinatura")) + "\"}")).body()).get("id"));
+
+        // ---------------------------------------------------------------- depois: A renomeada e desativada, B criada, C alterada
+        exigir(200, adm.enviar("PUT", "/api/config/regras-alerta/" + a, "{\"versao\":0,\"nome\":\"A renomeada\","
+                + "\"limiteMinutos\":60,\"acaoEsperada\":\"Outra acao\",\"ativa\":false}"));
+        String b = regra(adm, "{\"nome\":\"Permanencia muito longa (B)\",\"tipo\":\"TEMPO_TOTAL\",\"limiteMinutos\":90,"
+                + "\"acaoEsperada\":\"Acionar NIR\"}");
+        exigir(200, adm.enviar("PUT", "/api/config/regras-alerta/" + c, "{\"versao\":0,\"nome\":\"Permanencia em atraso (C v1)\","
+                + "\"limiteMinutos\":45,\"acaoEsperada\":\"Rever conduta e avisar NIR\",\"ativa\":true}"));
+
+        JsonNode d = json.readTree(exigir(200, med.enviar("GET", "/api/plantao/passagens/" + id, null)).body());
+        // Conteúdo ENTREGUE: regra A na versão 0, como era — não o nome/ação atuais; situação atual à parte.
+        JsonNode entregueA = alertaDaRegra(d.get("casos").get(0).get("alertas"), a);
+        assertEquals(0, entregueA.get("regraVersao").asInt());
+        assertEquals("Permanencia longa (A)", texto(entregueA.get("regra").get("nome")));
+        assertEquals("Avisar coordenacao", texto(entregueA.get("regra").get("acaoEsperada")));
+        assertEquals(60, entregueA.get("regra").get("limiteMinutos").asInt());
+        assertEquals(1, entregueA.get("regraAtual").get("versao").asInt());
+        assertFalse(entregueA.get("regraAtual").get("ativa").asBoolean(), "desativada depois");
+        assertFalse(d.toString().contains("A renomeada"), "dados da versão atual de A não aparecem como os entregues");
+
+        JsonNode caso = d.get("diferencas").get("casosAlterados").get(0);
+        assertTrue(caso.get("campos").toString().contains("ALERTAS"));
+        JsonNode mud = caso.get("alertas");
+        assertEquals(3, mud.size(), "A, B e C, um a um (2 → 2 alertas)");
+        JsonNode mA = mudancaDaRegra(mud, a);
+        assertEquals("REMOVIDO", texto(mA.get("tipo")));
+        assertTrue(mA.get("atual").isNull());
+        assertEquals("Permanencia longa (A)", texto(mA.get("entregue").get("regra").get("nome")));
+        JsonNode mB = mudancaDaRegra(mud, b);
+        assertEquals("ADICIONADO", texto(mB.get("tipo")));
+        assertTrue(mB.get("entregue").isNull());
+        assertEquals("Permanencia muito longa (B)", texto(mB.get("atual").get("regra").get("nome")));
+        assertEquals("Acionar NIR", texto(mB.get("atual").get("regra").get("acaoEsperada")));
+        assertEquals(entrada, java.time.Instant.parse(texto(mB.get("atual").get("referenciaEm"))));
+        assertEquals(entrada.plusSeconds(90 * 60), java.time.Instant.parse(texto(mB.get("atual").get("atingidoEm"))));
+        JsonNode mC = mudancaDaRegra(mud, c);
+        assertEquals("ALTERADO", texto(mC.get("tipo")));
+        assertEquals("[\"VERSAO_REGRA\",\"ATINGIDO\"]", mC.get("campos").toString());
+        assertEquals("Permanencia em atraso (C)", texto(mC.get("entregue").get("regra").get("nome")));
+        assertEquals(30, mC.get("entregue").get("regra").get("limiteMinutos").asInt());
+        assertEquals("Permanencia em atraso (C v1)", texto(mC.get("atual").get("regra").get("nome")));
+        assertEquals(45, mC.get("atual").get("regra").get("limiteMinutos").asInt());
+        String lida = texto(d.get("assinaturaRecebimento"));
+
+        // ---------------------------------------------------------------- nova versão de B depois da leitura → 409
+        exigir(200, adm.enviar("PUT", "/api/config/regras-alerta/" + b, "{\"versao\":0,\"nome\":\"Permanencia muito longa (B)\","
+                + "\"limiteMinutos\":90,\"acaoEsperada\":\"Acionar NIR e direcao\",\"ativa\":true}"));
+        HttpResponse<String> velha = med.enviar("POST", "/api/plantao/passagens/" + id + "/recebimento",
+                "{\"versao\":0,\"assinatura\":\"" + lida + "\"}");
+        assertEquals(409, velha.statusCode());
+        assertTrue(velha.body().contains("RECEBIMENTO_DESATUALIZADO"));
+        try (Connection cx = conexaoDono();
+             PreparedStatement ps = cx.prepareStatement("SELECT status::text, recebida_por, versao FROM fluxo.passagem_plantao WHERE id = ?")) {
+            ps.setObject(1, UUID.fromString(id));
+            try (ResultSet rs = ps.executeQuery()) {
+                assertTrue(rs.next());
+                assertEquals("ENTREGUE", rs.getString(1));
+                assertEquals(null, rs.getObject(2));
+                assertEquals(0, rs.getInt(3));
+            }
+        }
+
+        // ---------------------------------------------------------------- recarga explícita → B na versão 1 → recebimento
+        d = json.readTree(exigir(200, med.enviar("GET", "/api/plantao/passagens/" + id, null)).body());
+        mB = mudancaDaRegra(d.get("diferencas").get("casosAlterados").get(0).get("alertas"), b);
+        assertEquals(1, mB.get("atual").get("regraVersao").asInt());
+        assertEquals("Acionar NIR e direcao", texto(mB.get("atual").get("regra").get("acaoEsperada")));
+        exigir(204, med.enviar("POST", "/api/plantao/passagens/" + id + "/recebimento",
+                "{\"versao\":0,\"assinatura\":\"" + texto(d.get("assinaturaRecebimento")) + "\"}"));
+        // Depois de recebida, o conteúdo entregue continua com A na versão 0 (histórico, não configuração atual).
+        JsonNode recebida = json.readTree(exigir(200, med.enviar("GET", "/api/plantao/passagens/" + id, null)).body());
+        assertEquals("Permanencia longa (A)",
+                texto(alertaDaRegra(recebida.get("casos").get(0).get("alertas"), a).get("regra").get("nome")));
+        assertEquals(ep, texto(recebida.get("casos").get(0).get("episodioId")));
+    }
+
+    private String regra(ClienteHttp adm, String corpo) throws Exception {
+        return texto(json.readTree(exigir(201, adm.enviar("POST", "/api/config/regras-alerta", corpo)).body()).get("id"));
+    }
+
+    private static JsonNode alertaDaRegra(JsonNode alertas, String regra) {
+        for (JsonNode x : alertas) {
+            if (regra.equals(texto(x.get("regraId")))) {
+                return x;
+            }
+        }
+        throw new AssertionError("alerta da regra " + regra + " ausente: " + alertas);
+    }
+
+    private static JsonNode mudancaDaRegra(JsonNode mudancas, String regra) {
+        for (JsonNode m : mudancas) {
+            JsonNode lado = m.get("entregue").isNull() ? m.get("atual") : m.get("entregue");
+            if (regra.equals(texto(lado.get("regraId")))) {
+                return m;
+            }
+        }
+        throw new AssertionError("mudança da regra " + regra + " ausente: " + mudancas);
     }
 
     // ----------------------------------------------------------------------------

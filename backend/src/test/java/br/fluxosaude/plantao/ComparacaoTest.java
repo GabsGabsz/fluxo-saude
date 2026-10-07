@@ -100,6 +100,47 @@ class ComparacaoTest {
         assertTrue(Comparacao.entre(entregue, entregue).casos().isEmpty());
     }
 
+    static ConteudoPassagem.AlertaPassagem alerta(int regra, int versao, Instant referencia) {
+        return new ConteudoPassagem.AlertaPassagem(id(600 + regra), versao, br.fluxosaude.alerta.dominio.TipoRegraAlerta.TEMPO_TOTAL,
+                referencia, referencia.plus(Duration.ofHours(2)), null);
+    }
+
+    static CasoPassagem comAlertas(int versao, List<ConteudoPassagem.AlertaPassagem> alertas) {
+        return new CasoPassagem(id(1), versao, id(901), id(801), null, null, null, T.minus(Duration.ofHours(8)),
+                T.minus(Duration.ofHours(2)), !alertas.isEmpty(), false, alertas, List.of());
+    }
+
+    /** Revisão do PR #10 (alertas): troca A → B com a MESMA quantidade aparece como removido + adicionado. */
+    @Test
+    void trocaDeAlertaComMesmaQuantidadeIdentificaQualSaiuEQualEntrou() {
+        Instant ref = T.minus(Duration.ofHours(8));
+        ConteudoPassagem entregue = new ConteudoPassagem(List.of(comAlertas(0, List.of(alerta(1, 0, ref), alerta(3, 2, ref)))));
+        ConteudoPassagem atual = new ConteudoPassagem(List.of(comAlertas(0, List.of(alerta(2, 0, ref), alerta(3, 2, ref)))));
+        Comparacao.Caso caso = Comparacao.entre(entregue, atual).casos().get(0);
+        assertEquals(List.of(Comparacao.CampoCaso.ALERTAS), caso.campos());
+        Map<UUID, Comparacao.TipoAlerta> porRegra = new HashMap<>();
+        caso.alertas().forEach(a -> porRegra.put(a.regraId(), a.tipo()));
+        assertEquals(Map.of(id(601), Comparacao.TipoAlerta.REMOVIDO, id(602), Comparacao.TipoAlerta.ADICIONADO,
+                id(603), Comparacao.TipoAlerta.MANTIDO), porRegra, "A removido, B adicionado, C mantido — não só 2 → 2");
+        Comparacao.AlertaMudanca b = caso.alertas().stream().filter(a -> a.regraId().equals(id(602))).findFirst().orElseThrow();
+        assertNull(b.entregue());
+        assertEquals(alerta(2, 0, ref), b.atual());
+        assertEquals(atual.canonico(), reconstruir(entregue, Comparacao.entre(entregue, atual)).canonico());
+    }
+
+    @Test
+    void mesmaRegraEmOutraVersaoEhAlertaAlterado() {
+        Instant ref = T.minus(Duration.ofHours(8));
+        ConteudoPassagem entregue = new ConteudoPassagem(List.of(comAlertas(0, List.of(alerta(1, 0, ref)))));
+        ConteudoPassagem atual = new ConteudoPassagem(List.of(comAlertas(0, List.of(alerta(1, 1, ref)))));
+        Comparacao.AlertaMudanca a = Comparacao.entre(entregue, atual).casos().get(0).alertas().get(0);
+        assertEquals(Comparacao.TipoAlerta.ALTERADO, a.tipo());
+        assertEquals(List.of(Comparacao.CampoAlerta.VERSAO_REGRA), a.campos());
+        assertEquals(0, a.entregue().regraVersao());
+        assertEquals(1, a.atual().regraVersao());
+        assertTrue(Comparacao.entre(entregue, entregue).casos().isEmpty());
+    }
+
     /** O que a tela faz: parte do entregue e aplica cada mudança exibida (valores atuais). */
     static ConteudoPassagem reconstruir(ConteudoPassagem entregue, Comparacao c) {
         Map<UUID, CasoPassagem> casos = new HashMap<>();

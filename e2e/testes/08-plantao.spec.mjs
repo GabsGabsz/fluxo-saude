@@ -127,6 +127,104 @@ test('entrega e recebimento por outro profissional: situação atual (antes × a
   await coordApi.fechar();
 });
 
+// Alertas no recebimento (revisão do PR #10): a confirmação assina os alertas da situação atual, então a
+// tela identifica cada um — o que saiu, o que entrou, o que mudou de versão —, com a regra NA VERSÃO do
+// alerta (a configuração atual aparece só como aviso: "desativada/alterada depois"). As regras são de
+// "tempo na etapa" numa etapa usada só por este caso, para não mexer nos demais casos nem nos indicadores.
+test('recebimento identifica cada alerta: A trocado por B (mesma quantidade), C em nova versão; 409 após nova mudança', async ({ browser, baseURL }) => {
+  const admin = await clienteApi(baseURL, 'admin.norte');
+  const coordApi = await clienteApi(baseURL, 'coord.e2e');
+  await coordApi.usarUnidade(NORTE.codigo);
+  const enfApi = await clienteApi(baseURL, 'enf.e2e');
+  const cat = await coordApi.get('/api/catalogo');
+  const decisao = cat.etapas.find((e) => e.codigo === 'AGUARDANDO_DECISAO');
+  const semVaga = cat.motivos.find((m) => m.codigo === 'SEM_VAGA');
+  const tresHoras = new Date(Math.floor((Date.now() - 3 * 3600_000) / 60_000) * 60_000).toISOString();
+  const duasHoras = new Date(Math.floor((Date.now() - 2 * 3600_000) / 60_000) * 60_000).toISOString();
+  const ajuste = (ocorridoEm) => ({ ocorridoEm, justificativaAjuste: 'Registro tardio (cenário de teste)' });
+  const lambda = await abrirEpisodio(coordApi, { novoPaciente: { nome: 'Paciente Ficticio Lambda' }, setorNome: NORTE.setores[0][1],
+    momento: ajuste(tresHoras) });
+  await coordApi.put(`/api/episodios/${lambda}/etapa`, { versao: 0, etapaId: decisao.id, motivoId: semVaga.id, momento: ajuste(duasHoras) });
+  const nova = (nome, limiteMinutos, acaoEsperada) => admin.post('/api/config/regras-alerta',
+    { nome, tipo: 'TEMPO_NA_ETAPA', etapaId: decisao.id, limiteMinutos, acaoEsperada }, 201);
+  const altera = (r, versao, nome, limiteMinutos, acaoEsperada, ativa = true) => admin.put(`/api/config/regras-alerta/${r.id}`,
+    { versao, nome, etapaId: decisao.id, limiteMinutos, acaoEsperada, ativa });
+  const a = await nova('Decisao demorada (A)', 60, 'Avisar coordenacao');
+  const c = await nova('Decisao em atraso (C)', 30, 'Rever conduta');
+
+  // Entrega com A e C (pela API: o foco aqui é o recebimento).
+  const previa = await enfApi.get('/api/plantao/previa');
+  expect(previa.casos.find((x) => x.episodioId === lambda).alertas.map((x) => x.regraId).sort()).toEqual([a.id, c.id].sort());
+  const { id } = await enfApi.post('/api/plantao/passagens', { assinatura: previa.assinatura }, 201);
+
+  // Depois da entrega: A renomeada e desativada, B criada, C alterada (limite e ação) → 2 alertas antes e depois.
+  await altera(a, 0, 'A renomeada depois', 60, 'Outra acao', false);
+  const b = await nova('Decisao prolongada (B)', 90, 'Acionar NIR');
+  await altera(c, 0, 'Decisao em atraso (C v1)', 45, 'Rever conduta e avisar NIR');
+
+  const contexto = await browser.newContext({ baseURL });
+  const outra = await contexto.newPage();
+  await entrar(outra, 'coord.e2e');
+  await escolherUnidade(outra, NORTE.nome);
+  await outra.goto(`/#/plantao/${id}`);
+  const situacao = outra.getByRole('region', { name: 'Recebimento' });
+  const linha = (regra, mudanca) => situacao.locator(`[data-caso="${lambda}"] tr[data-alerta="${regra.id}"][data-mudanca="${mudanca}"]`);
+  const celula = (regra, mudanca, coluna) => linha(regra, mudanca).locator(`[data-rotulo="${coluna}"]`);
+
+  // A saiu: dados da versão 0 (não o nome atual) + aviso de que foi desativada depois.
+  await expect(celula(a, 'REMOVIDO', 'Na entrega')).toContainText('Decisao demorada (A) — versão 0; Tempo na etapa; limite: 1 h 00 min — ação esperada: Avisar coordenacao');
+  await expect(celula(a, 'REMOVIDO', 'Na entrega')).toContainText(`referência: ${dataHoraNorte(duasHoras)}`);
+  await expect(celula(a, 'REMOVIDO', 'Na entrega')).toContainText('Regra desativada depois (versão atual 1)');
+  await expect(celula(a, 'REMOVIDO', 'Agora')).toContainText('Não está mais em alerta');
+  await expect(situacao).not.toContainText('A renomeada depois');
+  // B entrou.
+  await expect(celula(b, 'ADICIONADO', 'Na entrega')).toContainText('Não havia');
+  await expect(celula(b, 'ADICIONADO', 'Agora')).toContainText('Decisao prolongada (B) — versão 0; Tempo na etapa; limite: 1 h 30 min — ação esperada: Acionar NIR');
+  await expect(celula(b, 'ADICIONADO', 'Agora'))
+    .toContainText(`limite atingido em ${dataHoraNorte(new Date(Date.parse(duasHoras) + 90 * 60_000).toISOString())}`);
+  // C mudou de versão: cada lado com os dados da sua versão.
+  await expect(celula(c, 'ALTERADO', 'Na entrega')).toContainText('Decisao em atraso (C) — versão 0');
+  await expect(celula(c, 'ALTERADO', 'Na entrega')).toContainText('ação esperada: Rever conduta');
+  await expect(celula(c, 'ALTERADO', 'Na entrega')).toContainText('Regra alterada depois (versão atual 1)');
+  await expect(celula(c, 'ALTERADO', 'Agora')).toContainText('Decisao em atraso (C v1) — versão 1');
+  await expect(celula(c, 'ALTERADO', 'Agora')).toContainText('ação esperada: Rever conduta e avisar NIR');
+  // Conteúdo entregue: A como era na entrega.
+  await expect(outra.getByRole('region', { name: 'Conteúdo entregue' }).locator(`[data-caso="${lambda}"] [data-alerta="${a.id}"]`))
+    .toContainText('Decisao demorada (A) — versão 0');
+  await capturar(outra, '08-recebimento-alertas');
+
+  // Nova versão de B DEPOIS da leitura: a confirmação vista é recusada e nada é gravado.
+  await altera(b, 0, 'Decisao prolongada (B)', 90, 'Acionar NIR e direcao');
+  const receber = outra.getByRole('form', { name: 'Confirmar recebimento' });
+  const [velha] = await Promise.all([
+    outra.waitForResponse((r) => r.url().endsWith('/recebimento')),
+    receber.getByRole('button', { name: 'Confirmar recebimento' }).click(),
+  ]);
+  expect(velha.status()).toBe(409);
+  expect((await velha.json()).codigo).toBe('RECEBIMENTO_DESATUALIZADO');
+  const naoConfirmada = (await coordApi.get(`/api/plantao/passagens/${id}`)).passagem;
+  expect(naoConfirmada.status).toBe('ENTREGUE');
+  expect(naoConfirmada.recebidaPor).toBeNull();
+  expect(naoConfirmada.versao).toBe(0);
+
+  // Recarga explícita: B na versão 1; só então a confirmação.
+  await receber.getByRole('button', { name: 'Recarregar dados' }).click();
+  await expect(celula(b, 'ADICIONADO', 'Agora')).toContainText('Decisao prolongada (B) — versão 1');
+  await expect(celula(b, 'ADICIONADO', 'Agora')).toContainText('ação esperada: Acionar NIR e direcao');
+  await outra.getByRole('form', { name: 'Confirmar recebimento' }).getByRole('button', { name: 'Confirmar recebimento' }).click();
+  await expect(outra.getByRole('heading', { name: 'Passagem recebida' })).toBeVisible();
+  expect((await coordApi.get(`/api/plantao/passagens/${id}`)).passagem.status).toBe('RECEBIDA');
+
+  // Limpeza: regras do cenário desativadas (não interferem nos testes seguintes).
+  const regras = await admin.get('/api/config/regras-alerta');
+  for (const r of regras.filter((x) => x.ativa && [b.id, c.id].includes(x.id))) {
+    await admin.put(`/api/config/regras-alerta/${r.id}`, { versao: r.versao, nome: r.nome, etapaId: decisao.id,
+      limiteMinutos: r.limiteMinutos, acaoEsperada: r.acaoEsperada, ativa: false });
+  }
+  await contexto.close();
+  await Promise.all([admin.fechar(), coordApi.fechar(), enfApi.fechar()]);
+});
+
 /** Mesmo formato da tela (dd/mm/aaaa hh:mm) no fuso da unidade Norte. */
 function dataHoraNorte(iso) {
   const [data, hora] = localNoFuso(Date.parse(iso), NORTE.fuso).split('T');

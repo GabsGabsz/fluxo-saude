@@ -29,13 +29,34 @@ public record Comparacao(Diferencas diferencas, List<Caso> casos, List<Pendencia
     /** {@code OUTRO_REGISTRO}: mudou só a versão da pendência. */
     public enum CampoPendencia { RESPONSAVEL, PRAZO, VENCIMENTO, CRITICIDADE, CATEGORIA, OUTRO_REGISTRO }
 
-    /** @param entregue nulo quando NOVO; @param atual nulo quando ENCERRADO. */
+    /** Como um alerta do caso mudou entre a entrega e agora (chave: regra + pendência). */
+    public enum TipoAlerta { ADICIONADO, REMOVIDO, ALTERADO, MANTIDO }
+
+    /** VERSAO_REGRA: a regra foi alterada (outra versão); REFERENCIA/ATINGIDO: instantes da ocorrência. */
+    public enum CampoAlerta { VERSAO_REGRA, TIPO, REFERENCIA, ATINGIDO }
+
+    /** @param entregue nulo quando ADICIONADO; @param atual nulo quando REMOVIDO. */
+    public record AlertaMudanca(TipoAlerta tipo, UUID regraId, UUID pendenciaId, ConteudoPassagem.AlertaPassagem entregue,
+                                ConteudoPassagem.AlertaPassagem atual, List<CampoAlerta> campos) {
+        public AlertaMudanca {
+            Objects.requireNonNull(tipo);
+            Objects.requireNonNull(regraId);
+            campos = List.copyOf(campos);
+        }
+    }
+
+    /**
+     * @param entregue nulo quando NOVO; @param atual nulo quando ENCERRADO.
+     * @param alertas  quando o campo ALERTAS mudou: TODOS os alertas do caso, um a um (adicionados,
+     *                 removidos, alterados e mantidos), mesmo que a quantidade não mude
+     */
     public record Caso(Tipo tipo, UUID episodioId, ConteudoPassagem.CasoPassagem entregue,
-                       ConteudoPassagem.CasoPassagem atual, List<CampoCaso> campos) {
+                       ConteudoPassagem.CasoPassagem atual, List<CampoCaso> campos, List<AlertaMudanca> alertas) {
         public Caso {
             Objects.requireNonNull(tipo);
             Objects.requireNonNull(episodioId);
             campos = List.copyOf(campos);
+            alertas = List.copyOf(alertas);
         }
     }
 
@@ -69,17 +90,18 @@ public record Comparacao(Diferencas diferencas, List<Caso> casos, List<Pendencia
         antes.forEach((id, c) -> {
             ConteudoPassagem.CasoPassagem n = agora.get(id);
             if (n == null) {
-                casos.add(new Caso(Tipo.ENCERRADO, id, c, null, List.of()));
+                casos.add(new Caso(Tipo.ENCERRADO, id, c, null, List.of(), List.of()));
             } else {
                 List<CampoCaso> campos = campos(c, n);
                 if (!campos.isEmpty()) {
-                    casos.add(new Caso(Tipo.ALTERADO, id, c, n, campos));
+                    casos.add(new Caso(Tipo.ALTERADO, id, c, n, campos,
+                            campos.contains(CampoCaso.ALERTAS) ? alertas(c.alertas(), n.alertas()) : List.of()));
                 }
             }
         });
         agora.forEach((id, n) -> {
             if (!antes.containsKey(id)) {
-                casos.add(new Caso(Tipo.NOVO, id, null, n, List.of()));
+                casos.add(new Caso(Tipo.NOVO, id, null, n, List.of(), List.of()));
             }
         });
 
@@ -163,6 +185,56 @@ public record Comparacao(Diferencas diferencas, List<Caso> casos, List<Pendencia
             r.add(CampoPendencia.OUTRO_REGISTRO);
         }
         return r;
+    }
+
+    /**
+     * Alertas pareados pela chave (regra, pendência): o motor gera no máximo um por regra (por
+     * pendência, em "pendência vencida"); repetições, se houver, são pareadas na ordem canônica.
+     */
+    static List<AlertaMudanca> alertas(List<ConteudoPassagem.AlertaPassagem> antes, List<ConteudoPassagem.AlertaPassagem> depois) {
+        Map<String, List<ConteudoPassagem.AlertaPassagem>> a = porChave(antes);
+        Map<String, List<ConteudoPassagem.AlertaPassagem>> b = porChave(depois);
+        List<String> chaves = new ArrayList<>(a.keySet());
+        b.keySet().stream().filter(k -> !a.containsKey(k)).forEach(chaves::add);
+        chaves.sort(Comparator.naturalOrder());
+        List<AlertaMudanca> r = new ArrayList<>();
+        for (String k : chaves) {
+            List<ConteudoPassagem.AlertaPassagem> la = a.getOrDefault(k, List.of());
+            List<ConteudoPassagem.AlertaPassagem> lb = b.getOrDefault(k, List.of());
+            for (int i = 0; i < Math.max(la.size(), lb.size()); i++) {
+                ConteudoPassagem.AlertaPassagem x = i < la.size() ? la.get(i) : null;
+                ConteudoPassagem.AlertaPassagem y = i < lb.size() ? lb.get(i) : null;
+                if (x == null) {
+                    r.add(new AlertaMudanca(TipoAlerta.ADICIONADO, y.regraId(), y.pendenciaId(), null, y, List.of()));
+                } else if (y == null) {
+                    r.add(new AlertaMudanca(TipoAlerta.REMOVIDO, x.regraId(), x.pendenciaId(), x, null, List.of()));
+                } else {
+                    List<CampoAlerta> campos = new ArrayList<>();
+                    if (x.regraVersao() != y.regraVersao()) {
+                        campos.add(CampoAlerta.VERSAO_REGRA);
+                    }
+                    if (x.tipo() != y.tipo()) {
+                        campos.add(CampoAlerta.TIPO);
+                    }
+                    if (!x.referenciaEm().equals(y.referenciaEm())) {
+                        campos.add(CampoAlerta.REFERENCIA);
+                    }
+                    if (!x.atingidoEm().equals(y.atingidoEm())) {
+                        campos.add(CampoAlerta.ATINGIDO);
+                    }
+                    r.add(new AlertaMudanca(campos.isEmpty() ? TipoAlerta.MANTIDO : TipoAlerta.ALTERADO, x.regraId(),
+                            x.pendenciaId(), x, y, campos));
+                }
+            }
+        }
+        return r;
+    }
+
+    private static Map<String, List<ConteudoPassagem.AlertaPassagem>> porChave(List<ConteudoPassagem.AlertaPassagem> l) {
+        Map<String, List<ConteudoPassagem.AlertaPassagem>> m = new LinkedHashMap<>();
+        l.forEach(x -> m.computeIfAbsent(x.regraId() + "|" + (x.pendenciaId() == null ? "" : x.pendenciaId()),
+                k -> new ArrayList<>()).add(x));
+        return m;
     }
 
     // ----------------------------------------------------------------------------

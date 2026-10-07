@@ -218,8 +218,15 @@ public final class ServicoPlantao {
         Set<UUID> etapas = new HashSet<>();
         Set<UUID> motivos = new HashSet<>();
         Set<UUID> profissionais = new HashSet<>();
+        Set<RepositorioPlantao.RegraVersaoId> regras = new HashSet<>();
         for (ConteudoPassagem c : conteudos) {
             c.casos().forEach(caso -> {
+                caso.alertas().forEach(a -> {
+                    regras.add(new RepositorioPlantao.RegraVersaoId(a.regraId(), a.regraVersao()));
+                    if (a.pendenciaId() != null) {
+                        pends.add(a.pendenciaId());
+                    }
+                });
                 eps.add(caso.episodioId());
                 setores.add(caso.setorId());
                 etapas.add(caso.etapaId());
@@ -237,7 +244,7 @@ public final class ServicoPlantao {
                 });
             });
         }
-        return r.nomes(new RepositorioPlantao.Referencias(eps, pends, setores, etapas, motivos, profissionais));
+        return r.nomes(new RepositorioPlantao.Referencias(eps, pends, setores, etapas, motivos, profissionais, regras));
     }
 
     private static Set<UUID> episodios(ConteudoPassagem c) {

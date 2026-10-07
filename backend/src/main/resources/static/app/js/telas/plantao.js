@@ -10,7 +10,7 @@ import { mensagemDeErro, ErroApi } from '../nucleo/api.js';
 import { criarFormulario, textoOuNulo } from '../nucleo/formulario.js';
 import { formatarDataHora } from '../nucleo/tempo.js';
 import * as rotulos from '../nucleo/rotulos.js';
-import { cronometro, dataHora, avisoOperacional } from '../nucleo/componentes.js';
+import { cronometro, dataHora, avisoOperacional, limite } from '../nucleo/componentes.js';
 
 export function montar(raiz, ctx, { id }) {
   let ativo = true;
@@ -31,7 +31,6 @@ export function montar(raiz, ctx, { id }) {
     motivo: (x) => (cat.motivos.find((e) => e.id === x) || {}).descricao || null,
     usuario: (x) => (cat.profissionais.find((e) => e.id === x) || {}).nome || 'profissional',
   };
-  let regras = new Map();
   let observacaoDigitada = ''; // sobrevive a "Recarregar dados": o texto digitado não se perde
 
   // Rótulos vêm do servidor (estado atual do cadastro, mesma leitura do conteúdo); o catálogo da
@@ -54,13 +53,10 @@ export function montar(raiz, ctx, { id }) {
     substituir(situacao);
     substituir(corpo, carregando());
     try {
-      const [listaRegras, dados] = await Promise.all([
-        ctx.api.obter('/api/config/regras-alerta'),
-        id ? ctx.api.obter(`/api/plantao/passagens/${id}`) : ctx.api.obter('/api/plantao/previa'),
-      ]);
+      // Regras dos alertas vêm na própria resposta, na VERSÃO de cada alerta (nunca a configuração atual).
+      const dados = await (id ? ctx.api.obter(`/api/plantao/passagens/${id}`) : ctx.api.obter('/api/plantao/previa'));
       const historico = id ? null : await ctx.api.obter('/api/plantao/passagens');
       if (!ativo) return;
-      regras = new Map(listaRegras.map((r) => [r.id, r]));
       ctx.sincronizar(dados.agora);
       formularios.length = 0;
       if (id) desenharDetalhe(dados);
@@ -90,12 +86,44 @@ export function montar(raiz, ctx, { id }) {
           ? [etiqueta('bloqueio', rotulos.categoria(c.categoria)), ' ', motivo || '', ' há ', cronometro(c.bloqueioDesde, agora)]
           : 'Sem bloqueio'),
         c.alertas.length ? [h('dt', {}, 'Alertas operacionais'), h('dd', {}, h('ul', { class: 'lista-compacta' },
-          c.alertas.map((a) => {
-            const r = regras.get(a.regraId);
-            return h('li', {}, r ? r.nome : rotulos.tipoRegra(a.tipo),
-              r && r.acaoEsperada ? ` — ação esperada: ${r.acaoEsperada}` : '');
-          })))] : null),
+          c.alertas.map((a) => h('li', { 'data-alerta': a.regraId }, alertaTexto(a)))))] : null),
       c.pendencias.length ? h('ul', { class: 'lista-compacta' }, c.pendencias.map((p) => linhaPendencia(p, mudados.has(p.id)))) : null);
+  }
+
+  // ------------------------------------------------------------ alertas (regra NA VERSÃO do alerta)
+  /**
+   * Regra, versão, tipo, limite e ação esperada DA VERSÃO gravada no alerta (histórico imutável),
+   * instantes da ocorrência e pendência vinculada. Versão anterior ao histórico: diz que os detalhes
+   * estão indisponíveis — nunca mostra os da configuração atual no lugar. A situação ATUAL da regra
+   * (alterada ou desativada depois) aparece à parte, como aviso.
+   */
+  function alertaTexto(a) {
+    const r = a.regra;
+    const partes = [h('strong', {}, r ? r.nome : `Regra (${rotulos.tipoRegra(a.tipo)})`),
+      ` — versão ${a.regraVersao}; ${rotulos.tipoRegra(a.tipo)}`,
+      r ? `; limite: ${limite(r.limiteMinutos)}` : '',
+      r ? (r.acaoEsperada ? ` — ação esperada: ${r.acaoEsperada}` : ' — sem ação esperada cadastrada')
+        : ' — detalhes desta versão da regra indisponíveis (anterior ao histórico de versões)',
+      ' — referência: ', dataHora(a.referenciaEm, fuso), '; limite atingido em ', dataHora(a.atingidoEm, fuso)];
+    if (a.pendenciaId) partes.push(` — pendência: ${a.pendenciaDescricao || 'pendência'}`);
+    const atual = a.regraAtual;
+    if (!atual) partes.push(' ', etiqueta('neutro', 'Situação atual da regra indisponível'));
+    else if (!atual.ativa) partes.push(' ', etiqueta('neutro', `Regra desativada depois (versão atual ${atual.versao})`));
+    else if (atual.versao !== a.regraVersao) partes.push(' ', etiqueta('neutro', `Regra alterada depois (versão atual ${atual.versao})`));
+    return partes;
+  }
+
+  const ROTULO_ALERTA = { ADICIONADO: 'Novo alerta', REMOVIDO: 'Alerta encerrado', ALTERADO: 'Alerta alterado', MANTIDO: 'Sem mudança' };
+
+  /** Todos os alertas do caso, um a um: o que saiu, o que entrou e o que mudou (mesmo com a mesma quantidade). */
+  function alertasAntesDepois(lista) {
+    return h('div', { class: 'rolagem' }, h('table', { class: 'responsiva antes-depois', 'aria-label': 'Alertas: na entrega e agora' },
+      h('thead', {}, h('tr', {}, ['Alerta', 'Na entrega', 'Agora'].map((t) => h('th', { scope: 'col' }, t)))),
+      h('tbody', {}, lista.map((m) => h('tr', { 'data-alerta': (m.entregue || m.atual).regraId, 'data-mudanca': m.tipo },
+        h('th', { scope: 'row', 'data-rotulo': 'Alerta' }, ROTULO_ALERTA[m.tipo] || m.tipo,
+          m.campos.length ? h('span', { class: 'discreto' }, ` (${m.campos.map(rotulos.campoAlerta).join(', ')})`) : null),
+        h('td', { 'data-rotulo': 'Na entrega' }, m.entregue ? alertaTexto(m.entregue) : 'Não havia'),
+        h('td', { 'data-rotulo': 'Agora' }, m.atual ? alertaTexto(m.atual) : 'Não está mais em alerta'))))));
   }
 
   function linhaPendencia(p, mudou = false) {
@@ -279,12 +307,12 @@ export function montar(raiz, ctx, { id }) {
       else if (campo === 'MOTIVO_BLOQUEIO') linhas.push(['Bloqueio/motivo', bloqueioTexto(a), bloqueioTexto(b)]);
       else if (campo === 'CRITICO') linhas.push(['Crítico (operacional)', a.critico ? 'Sim' : 'Não', b.critico ? 'Sim' : 'Não']);
       else if (campo === 'TRANSFERENCIA') linhas.push(['Transferência', a.transferencia ? 'Sim' : 'Não', b.transferencia ? 'Sim' : 'Não']);
-      else if (campo === 'ALERTAS') linhas.push(['Alertas operacionais', String(a.alertas.length), String(b.alertas.length)]);
       else if (campo === 'ENTRADA') linhas.push(['Entrada', dataHora(a.entradaEm, fuso), dataHora(b.entradaEm, fuso)]);
     }
     return h('li', { class: 'cartao', 'data-caso': x.episodioId },
       h('p', {}, linkCaso(x), campos(x.campos, rotulos.campoCaso)),
       linhas.length ? antesDepois(linhas) : null,
+      x.campos.includes('ALERTAS') ? [h('h4', {}, 'Alertas operacionais'), alertasAntesDepois(x.alertas || [])] : null,
       x.campos.includes('OUTRO_REGISTRO')
         ? h('p', { class: 'discreto' }, 'Houve outro registro no caso (ex.: observação ou protocolo). Abra o caso para ver.') : null);
   }

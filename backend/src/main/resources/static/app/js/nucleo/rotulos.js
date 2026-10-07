@@ -70,3 +70,5 @@ export const campoCaso = mapa({ ETAPA: 'Etapa', SETOR: 'Setor', MOTIVO_BLOQUEIO:
   TRANSFERENCIA: 'Transferência', ALERTAS: 'Alertas operacionais', ENTRADA: 'Entrada', OUTRO_REGISTRO: 'Outro registro no caso' });
 export const campoPendencia = mapa({ RESPONSAVEL: 'Responsável', PRAZO: 'Prazo', VENCIMENTO: 'Vencimento',
   CRITICIDADE: 'Criticidade operacional', CATEGORIA: 'Categoria', OUTRO_REGISTRO: 'Outro registro na pendência' });
+export const campoAlerta = mapa({ VERSAO_REGRA: 'versão da regra', TIPO: 'tipo', REFERENCIA: 'referência',
+  ATINGIDO: 'limite atingido em' });

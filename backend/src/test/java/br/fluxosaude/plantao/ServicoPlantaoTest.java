@@ -164,7 +164,7 @@ class ServicoPlantaoTest {
             ref.pendencias().forEach(p -> pend.put(p, "Ação " + p.toString().substring(30)));
             Map<UUID, String> setores = new HashMap<>();
             ref.setores().forEach(s -> setores.put(s, "Setor " + s.toString().substring(30)));
-            return new Nomes(pac, pend, setores, Map.of(), Map.of(), Map.of());
+            return new Nomes(pac, pend, setores, Map.of(), Map.of(), Map.of(), Map.of(), Map.of());
         }
 
         @Override

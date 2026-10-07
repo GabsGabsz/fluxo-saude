@@ -327,8 +327,35 @@ final class RepositorioPlantaoJdbc implements RepositorioPlantao {
                 return null;
             })
             .list();
+        // Regras dos alertas: dados da VERSÃO gravada (histórico imutável, V18) e, à parte, a situação atual.
+        Map<RegraVersaoId, RegraNaVersao> versoes = new HashMap<>();
+        Map<UUID, RegraAtual> atuais = new HashMap<>();
+        if (!ref.regras().isEmpty()) {
+            List<RegraVersaoId> pedidas = List.copyOf(ref.regras());
+            jdbc.sql("""
+                    SELECT v.regra_id, v.versao, v.nome, v.tipo::text, (extract(epoch FROM v.limite) / 60)::bigint,
+                           v.acao_esperada, v.ativa
+                      FROM unnest(CAST(? AS uuid[]), CAST(? AS int[])) AS q(regra_id, versao)
+                      JOIN fluxo.regra_alerta_versao v ON v.regra_id = q.regra_id AND v.versao = q.versao
+                    """)
+                .param(array(pedidas.stream().map(RegraVersaoId::regraId).toList()))
+                .param(pedidas.stream().map(x -> Integer.toString(x.versao())).collect(Collectors.joining(",", "{", "}")))
+                .query((rs, n) -> {
+                    long lim = rs.getLong(5);
+                    Long limite = rs.wasNull() ? null : lim;
+                    RegraNaVersao v = new RegraNaVersao(uuid(rs, 1), rs.getInt(2), rs.getString(3), rs.getString(4), limite,
+                            rs.getString(6), rs.getBoolean(7));
+                    versoes.put(new RegraVersaoId(v.regraId(), v.versao()), v);
+                    return null;
+                })
+                .list();
+            jdbc.sql("SELECT id, versao, ativa FROM fluxo.regra_alerta WHERE id = ANY (CAST(? AS uuid[]))")
+                .param(array(pedidas.stream().map(RegraVersaoId::regraId).collect(Collectors.toSet())))
+                .query((rs, n) -> atuais.put(uuid(rs, 1), new RegraAtual(uuid(rs, 1), rs.getInt(2), rs.getBoolean(3))))
+                .list();
+        }
         return new Nomes(porTipo.get("P"), porTipo.get("D"), porTipo.get("S"), porTipo.get("E"), porTipo.get("M"),
-                porTipo.get("U"));
+                porTipo.get("U"), versoes, atuais);
     }
 
     @Override

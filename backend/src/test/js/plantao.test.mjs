@@ -99,3 +99,89 @@ test('recebimento sem diferenças: informa e mantém o conteúdo entregue', asyn
   assert.match(regiao(raiz, 'Recebimento').textContent, /Nenhuma diferença entre o conteúdo entregue e a situação atual/);
   assert.doesNotMatch(regiao(raiz, 'Conteúdo entregue').textContent, /Mudou depois da entrega/);
 });
+
+// ------------------------------------------------------------------ alertas (revisão do PR #10)
+// O recebimento assina os alertas do conteúdo atual; a tela precisa identificar QUAL alerta saiu e
+// QUAL entrou, com a regra NA VERSÃO do alerta — não só "1 → 1", nem a configuração atual.
+const RA = '00000000-0000-0000-0000-0000000000a1';
+const RB = '00000000-0000-0000-0000-0000000000b2';
+const RC = '00000000-0000-0000-0000-0000000000c3';
+const alertaA = { regraId: RA, regraVersao: 0, tipo: 'TEMPO_TOTAL', referenciaEm: '2026-10-07T08:00:00Z', atingidoEm: '2026-10-07T09:00:00Z',
+  pendenciaId: null, pendenciaDescricao: null, regra: { nome: 'Permanencia longa (A)', limiteMinutos: 60, acaoEsperada: 'Avisar coordenacao', ativa: true },
+  regraAtual: { versao: 1, ativa: false } };
+const alertaB = { regraId: RB, regraVersao: 0, tipo: 'TEMPO_BLOQUEADO', referenciaEm: '2026-10-07T09:30:00Z', atingidoEm: '2026-10-07T11:30:00Z',
+  pendenciaId: null, pendenciaDescricao: null, regra: { nome: 'Bloqueio prolongado (B)', limiteMinutos: 120, acaoEsperada: 'Acionar NIR', ativa: true },
+  regraAtual: { versao: 0, ativa: true } };
+const alertaC = { regraId: RC, regraVersao: 3, tipo: 'PENDENCIA_VENCIDA', referenciaEm: '2026-10-07T10:00:00Z', atingidoEm: '2026-10-07T10:00:00Z',
+  pendenciaId: 'p1', pendenciaDescricao: 'Confirmar vaga de retaguarda', regra: { nome: 'Pendencia vencida (C)', limiteMinutos: null,
+    acaoEsperada: null, ativa: true }, regraAtual: { versao: 3, ativa: true } };
+
+function detalheComAlertas(entregues, atuais, mudancas) {
+  const ent = { ...casoBase, critico: true, alertas: entregues, pendencias: [] };
+  const atu = { ...casoBase, critico: true, alertas: atuais, pendencias: [] };
+  return { ...detalhe, casos: [{ ...ent, pendencias: [pendEntregue] }],
+    diferencas: { ...detalhe.diferencas, pendenciasAlteradas: [],
+      casosAlterados: [{ tipo: 'ALTERADO', episodioId: EP, pacienteNome: 'Paciente Ficticio Tela', campos: ['ALERTAS'],
+        entregue: ent, atual: atu, alertas: mudancas }],
+      contagens: { ...detalhe.diferencas.contagens, pendenciasAlteradas: 0 } } };
+}
+
+const celula = (raiz, regraId, mudanca, coluna) => {
+  const linha = regiao(raiz, 'Recebimento').todos((n) => n.tagName === 'tr' && n.getAttribute('data-alerta') === regraId
+    && n.getAttribute('data-mudanca') === mudanca)[0];
+  assert.ok(linha, `linha do alerta ${regraId} (${mudanca})`);
+  return linha.todos((n) => n.getAttribute('data-rotulo') === coluna)[0].textContent;
+};
+
+test('alertas: troca de A por B com a MESMA quantidade identifica o que saiu e o que entrou, com regra, versão e instantes', async () => {
+  const urls = [];
+  const ctx = contexto(detalheComAlertas([alertaA, alertaC], [alertaB, alertaC], [
+    { tipo: 'REMOVIDO', campos: [], entregue: alertaA, atual: null },
+    { tipo: 'ADICIONADO', campos: [], entregue: null, atual: alertaB },
+    { tipo: 'MANTIDO', campos: [], entregue: alertaC, atual: alertaC }]));
+  const obter = ctx.api.obter;
+  ctx.api.obter = (u) => { urls.push(u); return obter(u); };
+  const raiz = new No('main');
+  montar(raiz, ctx, { id: ID });
+  await esperar(); await esperar();
+  // A saiu: regra e versão entregues, situação atual da regra e "não está mais em alerta".
+  assert.match(celula(raiz, RA, 'REMOVIDO', 'Na entrega'), /Permanencia longa \(A\) — versão 0; Tempo total; limite: 1 h 00 min — ação esperada: Avisar coordenacao/);
+  assert.match(celula(raiz, RA, 'REMOVIDO', 'Na entrega'), /referência: 07\/10\/2026 05:00; limite atingido em 07\/10\/2026 06:00/);
+  assert.match(celula(raiz, RA, 'REMOVIDO', 'Na entrega'), /Regra desativada depois \(versão atual 1\)/);
+  assert.match(celula(raiz, RA, 'REMOVIDO', 'Agora'), /Não está mais em alerta/);
+  // B entrou: identificado por nome, versão, limite, ação, referência e instante atingido.
+  assert.match(celula(raiz, RB, 'ADICIONADO', 'Agora'), /Bloqueio prolongado \(B\) — versão 0; Tempo bloqueado; limite: 2 h 00 min — ação esperada: Acionar NIR/);
+  assert.match(celula(raiz, RB, 'ADICIONADO', 'Agora'), /referência: 07\/10\/2026 06:30; limite atingido em 07\/10\/2026 08:30/);
+  assert.match(celula(raiz, RB, 'ADICIONADO', 'Na entrega'), /Não havia/);
+  // C mantido, com o vínculo à pendência.
+  assert.match(celula(raiz, RC, 'MANTIDO', 'Agora'), /pendência: Confirmar vaga de retaguarda/);
+  assert.ok(!urls.includes('/api/config/regras-alerta'), 'a tela não busca a configuração atual para rotular alertas históricos');
+});
+
+test('alertas: mesma regra em outra versão mostra os dados de CADA versão (não os atuais no lugar dos entregues)', async () => {
+  const v0 = { ...alertaA, regra: { nome: 'Permanencia 6h', limiteMinutos: 360, acaoEsperada: 'Avisar coordenacao', ativa: true },
+    regraAtual: { versao: 1, ativa: true } };
+  const v1 = { ...alertaA, regraVersao: 1, regra: { nome: 'Permanencia 4h', limiteMinutos: 240, acaoEsperada: 'Avisar direcao', ativa: true },
+    regraAtual: { versao: 1, ativa: true } };
+  const raiz = new No('main');
+  montar(raiz, contexto(detalheComAlertas([v0], [v1], [{ tipo: 'ALTERADO', campos: ['VERSAO_REGRA'], entregue: v0, atual: v1 }])), { id: ID });
+  await esperar(); await esperar();
+  const antes = celula(raiz, RA, 'ALTERADO', 'Na entrega');
+  const agora = celula(raiz, RA, 'ALTERADO', 'Agora');
+  assert.match(antes, /Permanencia 6h — versão 0; Tempo total; limite: 6 h 00 min — ação esperada: Avisar coordenacao/);
+  assert.match(antes, /Regra alterada depois \(versão atual 1\)/);
+  assert.match(agora, /Permanencia 4h — versão 1; Tempo total; limite: 4 h 00 min — ação esperada: Avisar direcao/);
+  assert.doesNotMatch(antes, /Permanencia 4h|Avisar direcao/, 'versão entregue sem dados da versão atual');
+  assert.match(regiao(raiz, 'Recebimento').textContent, /Alerta alterado \(versão da regra\)/);
+});
+
+test('alertas: versão anterior ao histórico aparece como indisponível, nunca com o nome atual', async () => {
+  const semHistorico = { ...alertaA, regra: null, regraAtual: { versao: 4, ativa: true } };
+  const raiz = new No('main');
+  const r = { ...detalhe, casos: [{ ...casoBase, critico: true, alertas: [semHistorico], pendencias: [] }] };
+  montar(raiz, contexto(r), { id: ID });
+  await esperar(); await esperar();
+  const entregue = regiao(raiz, 'Conteúdo entregue').todos((n) => n.getAttribute('data-alerta') === RA)[0].textContent;
+  assert.match(entregue, /Regra \(Tempo total\) — versão 0; Tempo total — detalhes desta versão da regra indisponíveis/);
+  assert.match(entregue, /Regra alterada depois \(versão atual 4\)/);
+});
