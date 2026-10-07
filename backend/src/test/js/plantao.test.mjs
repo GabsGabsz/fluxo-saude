@@ -4,24 +4,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-// ------------------------------------------------------------------ DOM mínimo (só o que dom.js usa)
-class No {
-  constructor(tag) { this.tagName = tag; this.filhos = []; this.atributos = {}; this.ouvintes = {}; this.className = ''; this.value = ''; }
-  append(...nos) { for (const n of nos) { n.pai = this; this.filhos.push(n); } }
-  replaceChildren(...nos) { this.filhos = []; this.append(...nos); }
-  setAttribute(n, v) { this.atributos[n] = String(v); if (n === 'id') this.id = String(v); }
-  getAttribute(n) { return this.atributos[n] ?? null; }
-  removeAttribute(n) { delete this.atributos[n]; }
-  addEventListener(tipo, f) { (this.ouvintes[tipo] ||= []).push(f); }
-  contains(n) { for (let x = n; x; x = x.pai) if (x === this) return true; return false; }
-  focus() {}
-  get textContent() { return this.texto !== undefined ? this.texto : this.filhos.map((f) => f.textContent).join(''); }
-  set textContent(t) { this.filhos = []; this.texto = String(t); }
-  todos(pred, r = []) { if (pred(this)) r.push(this); this.filhos.forEach((f) => f.todos && f.todos(pred, r)); return r; }
-}
-class Texto extends No { constructor(t) { super('#text'); this.texto = t; } }
-globalThis.Node = No;
-globalThis.document = { createElement: (t) => new No(t), createTextNode: (t) => new Texto(t), activeElement: null };
+import { No } from './dom-minimo.mjs';
 
 const { montar } = await import('../../main/resources/static/app/js/telas/plantao.js');
 const rotulos = await import('../../main/resources/static/app/js/nucleo/rotulos.js');

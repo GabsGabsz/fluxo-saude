@@ -61,6 +61,14 @@ test('Direção: retrato, histórico com valor esperado, período vazio e dicion
   await expect(historico.locator('dt:text-is("Encerrados incluídos") + dd')).toHaveText('0');
   await expect(historico.locator('dt:text-is("Média") + dd')).toHaveText('sem dados');
 
+  // Limitações junto dos resultados (não só no dicionário): filtro de setor = setor atual/final.
+  await expect(historico.locator('.limitacao')).toHaveCount(0);
+  await page.getByLabel('Setor').selectOption({ label: NORTE.setores[0][1] });
+  await expect(calcular).toBeEnabled();
+  await Promise.all([page.waitForResponse((x) => x.url().includes('/api/indicadores?')), calcular.click()]);
+  await expect(historico.locator('.limitacao').first()).toContainText('setor ATUAL (abertos) ou FINAL (encerrados)');
+  await expect(historico.locator('h3', { hasText: 'Motivos de atraso' })).toBeVisible();
+
   // Dicionário: todos os verbetes marcados como proposta
   const dic = page.getByRole('region', { name: 'Dicionário de cálculo (RF-039)' });
   await expect(dic.locator('details')).toHaveCount(9);

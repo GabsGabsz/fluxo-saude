@@ -1,6 +1,6 @@
 # ADR-0009 — Passagem de plantão e indicadores
 
-- **Status:** proposto (PR da etapa 7), implementado em `V16` e nos módulos `plantao` e `indicador`
+- **Status:** proposto (PR da etapa 7), implementado em `V16`, `V17` e nos módulos `plantao` e `indicador`; revisado no PR #10
 - **Data:** 2026-10-07
 - **Requisitos:** M06 (RF-016, RF-017, CA-07, §10.4), M07 (RF-019, RF-020, CA-09, §10.5), RF-039 (parcial),
   RNF-002, RNF-003, RNF-014, RNF-015, RNF-017; pendências institucionais V-01, V-06, V-09
@@ -51,8 +51,12 @@ A ERS não define:
    - O conteúdo tem forma canônica: JSON determinístico, só com ids, códigos, instantes e versões.
    - Sua assinatura SHA-256 vai para a tela.
    - Na **entrega**, o servidor recompõe o conteúdo na mesma transação. Se a assinatura difere, responde 409 `PASSAGEM_DESATUALIZADA` e nada é gravado. Isso cobre episódio alterado ou encerrado, pendência criada ou resolvida, prazo vencido e regra alterada.
-   - No **recebimento**, a tela mostra o conteúdo entregue e as diferenças desde a entrega: casos encerrados, novos e alterados; pendências encerradas, novas e alteradas.
-   - A assinatura do recebimento cobre o conteúdo entregue, as diferenças e o conteúdo atual exibido. Se algo muda antes do clique, a resposta é 409 `RECEBIMENTO_DESATUALIZADO`, sem efeito.
+   - No **recebimento**, a tela separa duas coisas:
+     - **Situação atual**: cada caso ou pendência que mudou desde a entrega, com o valor **na entrega** e o valor **agora**, campo a campo (etapa, setor, bloqueio/motivo, marcações, alertas; responsável, prazo, vencimento, criticidade). Cada pendência vem ligada ao seu caso. Casos e pendências novos ou encerrados também aparecem.
+     - **Conteúdo entregue**: como estava na entrega, com marca nos itens que mudaram depois.
+   - O domínio (`Comparacao`) considera alterado qualquer campo diferente. Assim, conteúdo entregue + mudanças exibidas reconstroem exatamente o conteúdo atual (`ComparacaoTest`).
+   - A assinatura do recebimento cobre o conteúdo entregue, as diferenças e esse conteúdo atual, isto é, exatamente o que a tela mostra. Se algo muda antes do clique, a resposta é 409 `RECEBIMENTO_DESATUALIZADO`, sem efeito.
+   - Os rótulos (nomes de etapa, setor, motivo e responsável) são lidos do cadastro atual na mesma consulta e não entram na assinatura; os identificadores e códigos que eles nomeiam entram.
    - A versão da passagem é conferida, o que impede duplo recebimento ou cancelamento.
    - A interface nunca reenvia sozinha: o envio fica bloqueado até "Recarregar dados".
 5. **O que fica registrado e o que é consultado.**
@@ -66,6 +70,12 @@ A ERS não define:
      - nomes de setor, etapa, motivo e profissional.
 
      Assim nada nominal é duplicado na passagem, em log ou na auditoria. A auditoria por linha redige a observação e a justificativa.
+   - **Leituras registradas (V17, RNF-002).** Prévia e detalhe exibem nomes de muitos pacientes de uma vez, então registram a leitura como `CONSULTA_PREVIA_PASSAGEM` e `CONSULTA_PASSAGEM`, no padrão das consultas de caso e paciente:
+     - ator, unidade, IP, correlação e instante vêm do contexto do banco (`auditoria.registrar_consulta`);
+     - as referências são o **conjunto de episódios exibidos**, gravado uma única vez por unidade em `auditoria.conjunto_consultado`, endereçado pelo SHA-256 da lista ordenada de ids. O evento da cadeia leva só o hash e a contagem: cabe no limite de 4 KB, não tem nomes e leituras repetidas do mesmo conjunto não duplicam a lista;
+     - o conjunto é imutável, isolado por unidade (RLS), só aceita episódios da própria unidade e o banco recusa lista que não corresponda ao hash. Como o hash está no registro encadeado, trocar o conjunto seria detectável;
+     - no detalhe, o conteúdo entregue é referenciado pela própria passagem (registro imutável); só os casos exibidos além dele entram no conjunto. A prévia também registra a assinatura do conteúdo exibido;
+     - leitura recusada (permissão, outra unidade, inexistente) não gera registro de leitura.
 6. **Sem efeitos colaterais.** A passagem não resolve pendências, não registra ciência, não muda responsáveis e não encerra episódios. Os testes de serviço, IT e E2E conferem isso.
 7. **Banco (V16).**
    - RLS por unidade, mais política **restritiva** de papel para ler e escrever (`ctx_gerencia_plantao`).
@@ -112,6 +122,46 @@ A ERS não define:
 
    - Os planos usam `episodio_encerrados_idx` e `evento_episodio_indicadores_idx`.
    - Se o tempo de consulta se esgotar, a resposta é 503 `CONSULTA_DEMORADA`, não erro genérico.
+
+## Decisão — visão única dos indicadores (revisão do PR #10)
+
+Uma resposta de indicadores reúne várias consultas (retrato, situações abertas, desfechos, permanência, limites, tempos, motivos, volume). Em READ COMMITTED cada uma vê o que estava confirmado no seu instante: um encerramento confirmado entre duas consultas podia aparecer em umas e não em outras.
+
+Opções avaliadas:
+
+| Opção | Avaliação |
+|---|---|
+| Uma única consulta SQL para tudo | Coerente, mas junta nove cálculos num comando difícil de manter e testar; perde a separação por indicador. |
+| Exportar o instantâneo (`pg_export_snapshot`) | Exige coordenar conexões; sem ganho para leituras numa só conexão. |
+| REPEATABLE READ para todas as transações | Rejeitada: a cadeia de auditoria (ADR-0003) exige READ COMMITTED para encadear sem bifurcar. |
+| **REPEATABLE READ somente leitura só nos indicadores** | **Escolhida.** |
+
+Como funciona (`ExecutorTransacional.executarLeituraConsistente`):
+
+- transação própria, REPEATABLE READ e READ ONLY; o primeiro comando fixa o modo (`SET TRANSACTION ...`) e ele é conferido, com falha fechada se não estiver ativo;
+- depois, o mesmo `fluxo.aplicar_contexto` de sempre (revalidação da sessão, versão de credencial e papéis) e o mesmo RLS, tudo no mesmo instantâneo;
+- não grava nada: READ ONLY recusa INSERT e o gatilho da cadeia recusa isolamento diferente de READ COMMITTED. Por isso os indicadores não podem registrar auditoria nessa transação; se um dia precisarem, será numa transação READ COMMITTED separada;
+- leitura pura em REPEATABLE READ não sofre erro de serialização nem bloqueia gravações;
+- o isolamento das demais transações não muda.
+
+Efeitos:
+
+- o instantâneo é tirado no primeiro comando; o "agora" da resposta é lido logo depois. Gravações confirmadas durante o cálculo entram inteiras na próxima consulta;
+- a transação segura o horizonte de limpeza (VACUUM) enquanto dura; o cálculo leva centenas de milissegundos e o `statement_timeout` limita cada consulta.
+
+Testes: `concorrencia-indicadores.sh` (sessões reais; encerramento confirmado entre desfechos e as demais consultas não aparece em nenhuma; controle em READ COMMITTED mostra a mistura) e `IndicadoresConsistenciaIT` (serviço com a transação real; outra requisição HTTP encerra um episódio no meio da resposta).
+
+A passagem de plantão continua em READ COMMITTED porque grava e audita: lê o estado atual numa única consulta (`casosAbertos`) e a confirmação recompõe tudo na transação que grava, recusando com 409 qualquer diferença do que foi exibido.
+
+## Decisão — limitações visíveis junto dos resultados
+
+As limitações não ficam só no dicionário:
+
+- "Encerrados acima dos limites": aviso de que o limite usado é o **vigente** hoje, aplicado a todo o período;
+- com filtro de setor: aviso de que cada episódio conta no setor **atual** (abertos) ou **final** (encerrados), também junto dos motivos;
+- cada bloco do histórico mantém a marca "Proposta (V-09)".
+
+RF-039 continua parcial (dicionário fixo) e as fórmulas continuam propostas até a validação institucional (V-09).
 
 ## Consequências
 

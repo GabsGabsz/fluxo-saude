@@ -9,6 +9,11 @@ Fonte de verdade: `DicionarioIndicadores` (servido em `GET /api/indicadores/dici
 > fórmulas exatas (V-09). Não há metas, limites clínicos nem comparação entre profissionais. Os
 > indicadores são operacionais e não indicam risco clínico.
 
+Todos os indicadores de uma resposta (retrato e histórico) são calculados no **mesmo instantâneo do
+banco** (transação REPEATABLE READ somente leitura; ADR-0009). As limitações de interpretação abaixo
+(limite vigente aplicado ao histórico; setor atual/final) também aparecem na tela junto dos
+resultados a que se referem.
+
 ## Permanência média (`PERMANENCIA_MEDIA`)
 
 | Campo | Definição |

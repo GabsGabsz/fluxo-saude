@@ -107,6 +107,8 @@ export function montar(raiz, ctx) {
   function historico(r) {
     const hst = r.historico;
     const perm = hst.permanencia;
+    const porSetor = r.setor ? limitacao('Filtro de setor: cada episódio conta no setor ATUAL (abertos) ou FINAL (encerrados), '
+      + 'não no setor em que estava quando o fato ocorreu.') : null;
     const limites = hst.acimaDosLimites.length === 0
       ? mensagem('info', 'Nenhum limite de permanência configurado (regra ativa "tempo total" sem etapa): indicador indisponível.')
       : tabelaSimples(['Limite', 'Encerrados acima', 'Base', '%'], hst.acimaDosLimites.map((l) => [
@@ -141,26 +143,32 @@ export function montar(raiz, ctx) {
       h('p', { class: 'discreto' }, `De ${dataBr(r.inicio)} a ${dataBr(r.fim)} (datas locais, fuso ${r.fuso}): `,
         `[${formatarDataHora(r.inicioEm, fuso)}, ${formatarDataHora(r.fimEm, fuso)}). `,
         r.setor ? `Setor: ${(cat.setores.find((s) => s.id === r.setor) || {}).nome || '—'}. ` : 'Todos os setores. ',
-        'Calculado sobre todos os registros da unidade.'),
-      h('h3', {}, 'Permanência dos episódios encerrados no período'), etiqueta('neutro', 'Proposta (V-09)'),
+        'Calculado sobre todos os registros da unidade, no mesmo instantâneo do banco que o retrato acima.'),
+      porSetor,
+      h('h3', {}, 'Permanência dos episódios encerrados no período'), proposta(),
       h('dl', { class: 'dados' },
         h('dt', {}, 'Encerrados incluídos'), h('dd', { class: 'numero' }, String(perm.incluidos)),
         h('dt', {}, 'Excluídos (encerramento administrativo)'), h('dd', { class: 'numero' }, String(perm.naoIncluidos)),
         h('dt', {}, 'Média'), h('dd', {}, duracao(perm.mediaMin)),
         h('dt', {}, 'Mediana'), h('dd', {}, duracao(perm.medianaMin)),
         h('dt', {}, 'Menor / maior'), h('dd', {}, `${duracao(perm.minimoMin)} / ${duracao(perm.maximoMin)}`)),
-      h('h3', {}, 'Encerrados acima dos limites configurados'), limites,
-      h('h3', {}, `Saídas por desfecho (transferências: ${hst.transferencias})`), desfechos,
-      h('h3', {}, 'Tempos de transferência (reconstruídos da linha do tempo)'),
+      h('h3', {}, 'Encerrados acima dos limites configurados'), proposta(),
+      hst.acimaDosLimites.length ? limitacao('Usa o limite VIGENTE de cada regra hoje para todo o período: se a regra foi '
+        + 'alterada, encerramentos antigos são comparados ao limite atual, não ao que valia na época.') : null,
+      limites,
+      h('h3', {}, `Saídas por desfecho (transferências: ${hst.transferencias})`), proposta(), desfechos,
+      h('h3', {}, 'Tempos de transferência (reconstruídos da linha do tempo)'), proposta(),
       tabelaSimples(['Intervalo', 'Episódios', 'Sem marco inicial (dado ausente)', 'Média', 'Mediana'], [
         ['Solicitação → aceite', String(hst.solicitacaoAceite.incluidos), String(hst.solicitacaoAceite.naoIncluidos),
           duracao(hst.solicitacaoAceite.mediaMin), duracao(hst.solicitacaoAceite.medianaMin)],
         ['Aceite → saída', String(hst.aceiteSaida.incluidos), String(hst.aceiteSaida.naoIncluidos),
           duracao(hst.aceiteSaida.mediaMin), duracao(hst.aceiteSaida.medianaMin)]]),
-      h('h3', {}, 'Motivos de atraso/gargalo (RF-020)'),
+      h('h3', {}, 'Motivos de atraso/gargalo (RF-020)'), proposta(),
+      r.setor ? limitacao('O tempo bloqueado é atribuído ao setor atual/final do episódio, não ao setor no momento do bloqueio.')
+        : null,
       hst.motivos.length ? h('p', { class: 'discreto' }, `Tempo bloqueado total no período: ${formatarDuracao(hst.minutosBloqueadosTotal * 60000)}.`) : null,
       motivos,
-      h('h3', {}, 'Volume diário (tendência)'), volume);
+      h('h3', {}, 'Volume diário (tendência)'), proposta(), volume);
   }
 
   // ------------------------------------------------------------ dicionário
@@ -190,6 +198,16 @@ export function montar(raiz, ctx) {
   calcular();
   carregarDicionario();
   return { desmontar() { ativo = false; }, emEdicao: () => false };
+}
+
+/** Marca de fórmula ainda não validada pela instituição (V-09). */
+function proposta() {
+  return etiqueta('neutro', 'Proposta (V-09)');
+}
+
+/** Limitação de interpretação mostrada JUNTO do resultado a que se refere (não só no dicionário). */
+function limitacao(texto) {
+  return h('p', { class: 'mensagem mensagem-aviso limitacao', role: 'note' }, h('strong', {}, 'Limitação: '), texto);
 }
 
 function duracao(min) {
