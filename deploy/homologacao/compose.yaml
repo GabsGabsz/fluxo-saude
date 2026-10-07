@@ -13,9 +13,13 @@
 # Segredos: arquivos em ${FLUXO_SEGREDOS} (fora do Git), montados como "secrets".
 # =============================================================================
 x-imagem-app: &imagem-app
-  image: fluxo-saude:${FLUXO_VERSAO:-local}
+  # Imagem EXPLÍCITA do projeto (fluxo.sh construir/atualizar/restaurar a definem). "subir" usa
+  # --no-build: uma imagem ausente é erro, nunca construída em silêncio.
+  image: ${FLUXO_IMAGEM:?defina FLUXO_IMAGEM (use deploy/homologacao/fluxo.sh construir)}
   build:
     context: ../../backend
+    args:
+      FLUXO_COMMIT: ${FLUXO_COMMIT:-desconhecido}
   read_only: true
   tmpfs:
     - /tmp
@@ -54,7 +58,9 @@ services:
 
   migracao:
     <<: *imagem-app
-    command: ["--spring.profiles.active=migracao"]
+    # Alvo do Flyway: "latest" (instalação/atualização) ou "current" (ambiente RESTAURADO: só
+    # valida o histórico e as somas; nunca aplica migração nova).
+    command: ["--spring.profiles.active=migracao", "--spring.flyway.target=${FLUXO_FLYWAY_ALVO:-latest}"]
     restart: "no"
     environment:
       FLUXO_DB_URL: jdbc:postgresql://db:5432/fluxo

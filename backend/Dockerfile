@@ -14,12 +14,19 @@ RUN --mount=type=cache,target=/root/.m2 mvn -B -ntp -q dependency:go-offline || 
 COPY src/main ./src/main
 RUN --mount=type=cache,target=/root/.m2 mvn -B -ntp -Dmaven.test.skip=true package \
  && cp "$(ls target/fluxo-saude-backend-*.jar | grep -v '\.original$' | head -1)" /app.jar
+# Inventário das migrações embutidas no jar (arquivo e SHA-256): a operação compara este conjunto
+# com o histórico do banco antes de subir a aplicação (compatibilidade imagem × esquema).
+RUN cd src/main/resources/db/migration && sha256sum V*__*.sql | sort -k2 -V > /migracoes.txt
 
 FROM eclipse-temurin:21-jre
+ARG FLUXO_COMMIT=desconhecido
+LABEL org.opencontainers.image.title="fluxo-saude" \
+      org.opencontainers.image.revision="${FLUXO_COMMIT}"
 RUN groupadd --system --gid 10001 fluxo \
  && useradd --system --uid 10001 --gid fluxo --home-dir /app --shell /usr/sbin/nologin fluxo
 WORKDIR /app
 COPY --from=build --chown=root:root --chmod=0444 /app.jar /app/app.jar
+COPY --from=build --chown=root:root --chmod=0444 /migracoes.txt /app/migracoes.txt
 COPY --chown=root:root --chmod=0555 docker/entrypoint.sh /app/entrypoint.sh
 USER 10001:10001
 ENV JAVA_TOOL_OPTIONS="-XX:MaxRAMPercentage=75 -Djava.io.tmpdir=/tmp"
