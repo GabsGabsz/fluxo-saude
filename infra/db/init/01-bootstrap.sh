@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 # Bootstrap do PostgreSQL (executado UMA vez, como superusuário).
-# Usado pelo docker-compose (dev), pelos testes de integração e como referência
+# Usado pelo docker-compose (dev), pelo Compose de homologação, pelos testes de integração e como referência
 # para o DBA em produção. Ver docs/adr/0004-isolamento-por-unidade.md.
 #
 #   fluxo_owner -> dono do banco/objetos; usado SOMENTE pelo Flyway (migrações)
@@ -10,6 +10,14 @@
 # Senhas vêm do ambiente — nunca versionadas.
 # =============================================================================
 set -euo pipefail
+# Senhas também podem vir de ARQUIVOS de segredo (FLUXO_*_PASSWORD_FILE), como no Compose de
+# homologação (deploy/homologacao): assim não aparecem em variáveis de ambiente do contêiner.
+for _var in FLUXO_OWNER_PASSWORD FLUXO_APP_PASSWORD; do
+  _arq="${_var}_FILE"
+  if [ -z "${!_var:-}" ] && [ -n "${!_arq:-}" ]; then
+    export "$_var"="$(cat "${!_arq}")"
+  fi
+done
 : "${FLUXO_OWNER_PASSWORD:?defina FLUXO_OWNER_PASSWORD}"
 : "${FLUXO_APP_PASSWORD:?defina FLUXO_APP_PASSWORD}"
 FLUXO_DB="${FLUXO_DB:-fluxo}"

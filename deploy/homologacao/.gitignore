@@ -1,0 +1,9 @@
+# Gerados pela operação — NUNCA versionar (segredos, configuração local, backups, relatórios).
+segredos/
+ambientes/
+backups/
+relatorios/
+*.dump
+*.manifesto
+*.sha256
+__pycache__/

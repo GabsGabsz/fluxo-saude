@@ -1,0 +1,22 @@
+# Proxy HTTPS de HOMOLOGAÇÃO (Caddy). Termina o TLS e encaminha para a aplicação na mesma origem.
+# - "tls internal": certificado da CA interna do Caddy (só homologação; o navegador precisa
+#   confiar na CA: ver docs/operacao/homologacao.md). Em implantação institucional, troque por
+#   "tls /caminho/cert.pem /caminho/chave.pem" (certificado da instituição).
+# - Nenhum "trusted_proxies" é configurado: cabeçalhos X-Forwarded-* vindos do CLIENTE são
+#   ignorados e o Caddy envia à aplicação o endereço real da conexão. A aplicação, por sua vez, só
+#   aceita X-Forwarded-* deste proxy (IP fixo; FLUXO_PROXY_CONFIAVEL).
+{
+	admin off
+	skip_install_trust
+}
+
+{$FLUXO_DOMINIO:localhost} {
+	tls internal
+	encode gzip
+	reverse_proxy app:8080 {
+		header_up -X-Forwarded-Host
+	}
+	header {
+		-Server
+	}
+}
