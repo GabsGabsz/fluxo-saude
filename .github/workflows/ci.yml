@@ -75,3 +75,84 @@ jobs:
             backend/target/failsafe-reports/
           if-no-files-found: warn
           retention-days: 14
+
+  interface:
+    name: Interface — testes de unidade (Node)
+    runs-on: ubuntu-24.04   # fixo: ubuntu-latest migra para o Ubuntu 26 em 19/10/2026; atualizar de forma deliberada
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+      - name: node --test (núcleo da interface)
+        working-directory: backend
+        run: node --test 'src/test/js/*.test.mjs'
+
+  e2e:
+    name: Interface — E2E (Playwright + aplicação + PostgreSQL 16 reais)
+    runs-on: ubuntu-24.04   # fixo: ubuntu-latest migra para o Ubuntu 26 em 19/10/2026; atualizar de forma deliberada
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_HOST_AUTH_METHOD: scram-sha-256   # papéis com senha, como em produção
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      PGHOST: localhost
+      PGUSER: postgres
+      PGPASSWORD: postgres          # superusuário do banco EFÊMERO do CI (não é segredo de produção)
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+          cache-dependency-path: backend/pom.xml
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Ferramentas (psql, argon2-cffi)
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
+          pip install --quiet argon2-cffi==25.1.0
+      - name: Construir o jar
+        working-directory: backend
+        run: mvn -B -ntp -DskipTests package
+      - name: Banco + migrações + dados fictícios + aplicação real
+        run: e2e/preparar-ambiente.sh
+      - name: Dependências do Playwright
+        working-directory: e2e
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Playwright
+        working-directory: e2e
+        env:
+          E2E_BASE_URL: http://localhost:8080
+        run: npx playwright test
+      - name: Encerrar aplicação
+        if: always()
+        run: kill "$(cat e2e/resultados/aplicacao.pid)" 2>/dev/null || true
+      - name: Guardar relatório, capturas de tela e log da aplicação
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-interface
+          path: |
+            e2e/relatorio/
+            e2e/capturas/
+            e2e/resultados/
+          if-no-files-found: warn
+          retention-days: 14

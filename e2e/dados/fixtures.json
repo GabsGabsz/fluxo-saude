@@ -1,0 +1,31 @@
+{
+  "_aviso": "Dados 100% FICTÍCIOS, só para o banco efêmero dos testes E2E. Nenhuma senha aqui vale fora desse banco.",
+  "unidades": [
+    { "codigo": "E2E_NORTE", "nome": "UPA Exemplo Norte", "fuso": "America/Fortaleza",
+      "setores": [["OBS_N", "Observação Norte"], ["EMERG_N", "Emergência Norte"]] },
+    { "codigo": "E2E_SUL", "nome": "UPA Exemplo Sul", "fuso": "America/Manaus",
+      "setores": [["OBS_S", "Observação Sul"]] }
+  ],
+  "usuarios": [
+    { "login": "admin.norte", "nome": "Ana Administradora Ficticia", "senha": "girassol violeta na janela 41",
+      "gestora": "E2E_NORTE", "lotacoes": { "E2E_NORTE": ["ADMINISTRADOR"] } },
+    { "login": "admin.sul", "nome": "Saulo Administrador Ficticio", "senha": "cometa laranja sobre o rio 17",
+      "gestora": "E2E_SUL", "lotacoes": { "E2E_SUL": ["ADMINISTRADOR"] } },
+    { "login": "coord.e2e", "nome": "Caio Coordenador Ficticio", "senha": "trem azul atravessa a serra 23",
+      "gestora": "E2E_NORTE", "lotacoes": { "E2E_NORTE": ["COORDENACAO_FLUXO"], "E2E_SUL": ["COORDENACAO_FLUXO"] } },
+    { "login": "enf.e2e", "nome": "Elisa Enfermeira Ficticia", "senha": "barco verde no porto antigo 58",
+      "gestora": "E2E_NORTE", "lotacoes": { "E2E_NORTE": ["ENFERMAGEM"] } },
+    { "login": "direcao.e2e", "nome": "Davi Diretor Ficticio", "senha": "lanterna dourada no corredor 66",
+      "gestora": "E2E_NORTE", "lotacoes": { "E2E_NORTE": ["DIRECAO"] } },
+    { "login": "novo.e2e", "nome": "Nina Novata Ficticia", "senha": "provisoria de teste somente 90",
+      "deveTrocarSenha": true, "gestora": "E2E_NORTE", "lotacoes": { "E2E_NORTE": ["ENFERMAGEM"] } },
+    { "login": "revogado.e2e", "nome": "Rui Revogado Ficticio", "senha": "pipa amarela no varal 3021",
+      "gestora": "E2E_NORTE", "lotacoes": { "E2E_NORTE": ["ENFERMAGEM"] } }
+  ],
+  "pacientes": [
+    { "unidade": "E2E_NORTE", "nome": "Paciente Ficticio Alfa", "cns": "700000000000005" },
+    { "unidade": "E2E_NORTE", "nome": "Paciente Ficticio Gama", "cns": "700000000001109" },
+    { "unidade": "E2E_SUL", "nome": "Paciente Ficticio Beta", "cns": "799000111222307" }
+  ],
+  "novoPacienteCns": "898123456789018"
+}
