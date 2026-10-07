@@ -23,7 +23,7 @@ test('coordenação: gargalo calculado à mão, CSV e impressão iguais à tela,
   // Mu, em Emergência Norte: atendimento 3 h atrás; aguardando solicitação (bloqueio REGULAÇÃO) 2 h atrás; volta 1 h atrás.
   const mu = await abrirEpisodio(coord, { novoPaciente: { nome: 'Paciente Ficticio Mu' }, setorNome: EMERG, momento: em(3) });
   const v = (await coord.put(`/api/episodios/${mu}/etapa`, { versao: 0, etapaId: solicitar.id, motivoId: naoEnviada.id, momento: em(2) })).versao;
-  await (coord.put(`/api/episodios/${mu}/etapa`, { versao: v, etapaId: atendimento.id, momento: em(1) })).versao;
+  await coord.put(`/api/episodios/${mu}/etapa`, { versao: v, etapaId: atendimento.id, momento: em(1) });
   const setor = cat.setores.find((s) => s.nome === EMERG);
   const prazo = new Date(Date.now() + 8 * 3600_000).toISOString();
   await coord.post(`/api/episodios/${mu}/pendencias`, { categoria: 'LOGISTICA', descricao: '=HYPERLINK("http://exemplo.invalido") ambulancia',
