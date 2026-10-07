@@ -23,11 +23,11 @@ import org.springframework.jdbc.core.simple.JdbcClient;
  * Indicadores sobre as funções fluxo.ind_* (V16). Só agregados: nenhuma consulta daqui devolve
  * nome, CNS ou identificador de paciente/episódio. SQL sempre parametrizado; RLS por unidade.
  */
-final class RepositorioIndicadoresJdbc implements RepositorioIndicadores {
+public final class RepositorioIndicadoresJdbc implements RepositorioIndicadores {
 
     private final JdbcClient jdbc;
 
-    RepositorioIndicadoresJdbc(JdbcClient jdbc) {
+    public RepositorioIndicadoresJdbc(JdbcClient jdbc) {
         this.jdbc = jdbc;
     }
 
