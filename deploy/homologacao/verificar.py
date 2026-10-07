@@ -8,7 +8,11 @@ Senhas são lidas de ARQUIVOS (nunca de argumentos) e nunca são impressas.
 
 Comandos:
   cabecalhos                      página como NAVEGADOR (text/html) + recursos estáticos; HTTPS, HSTS,
-                                  CSP, cookies Secure/HttpOnly/SameSite e __Host-
+                                  CSP, saúde; cookie CSRF: emissão (jar vazio), armazenamento e reuso
+  autoteste                       (sem servidor) o validador de cookies REJEITA cookie sem Secure,
+                                  "secure" só no valor, Path errado, cookie vazio e jar não seguro
+  validar-set-cookie --espera aceito|rejeitado   lê de stdin linhas Set-Cookie (valor já removido)
+                                  e aplica o mesmo validador (CI: cookie real emitido por HTTP direto)
   primeiro-acesso                 login com senha provisória -> 403 até trocar -> troca -> permissões
   origem-forjada --correlacao ID  login inválido com X-Forwarded-For forjado e X-Correlation-Id próprio
                                   (o CI confere no banco o IP do evento DESSA requisição)
@@ -36,6 +40,7 @@ NAVEGADOR = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"   
 CABECALHOS_SEGUROS = ("Content-Type", "Content-Length", "Location", "Strict-Transport-Security",
                       "Content-Security-Policy", "X-Frame-Options", "X-Content-Type-Options", "Cache-Control",
                       "X-Correlation-Id", "Vary")
+CSRF = "XSRF-TOKEN"
 DIAGNOSTICO = None          # arquivo de diagnóstico (opção --diagnostico)
 ULTIMA = {}                 # resumo sanitizado da última resposta, para o diagnóstico
 
@@ -85,9 +90,13 @@ class Cliente:
         return st, hd, corpo
 
     def cookie(self, nome):
+        ck = self.cookie_obj(nome)
+        return ck.value if ck else None
+
+    def cookie_obj(self, nome):
         for c in self.jar:
             if c.name == nome:
-                return c.value
+                return c
         return None
 
     def entrar(self, login, senha, com_cabecalhos=False):
@@ -120,6 +129,58 @@ def info(msg):
     if DIAGNOSTICO:
         with open(DIAGNOSTICO, "a", encoding="utf-8") as f:
             f.write(f"info: {msg}\n")
+
+
+def atributos_set_cookie(linha):
+    """Decompõe um Set-Cookie em (nome, valor_presente, {atributo_minúsculo: valor}).
+
+    Atributos são conferidos como TOKENS (separados por ';'), nunca por substring: "secure" dentro do
+    valor ou de outro atributo NÃO conta como o atributo Secure."""
+    partes = [p.strip() for p in linha.split(";")]
+    nome, _, valor = partes[0].partition("=")
+    attrs = {}
+    for p in partes[1:]:
+        if p:
+            k, _, v = p.partition("=")
+            attrs[k.strip().lower()] = v.strip()
+    return nome.strip(), bool(valor.strip()), attrs
+
+
+def problemas_set_cookie_csrf(linha):
+    """Lista vazia = Set-Cookie do token CSRF aceitável para HTTPS. Nunca devolve o valor do cookie."""
+    nome, tem_valor, attrs = atributos_set_cookie(linha)
+    p = []
+    if nome != CSRF:
+        p.append(f"nome inesperado ({nome!r})")
+    if not tem_valor:
+        p.append("valor vazio (remoção do cookie, não emissão)")
+    if "secure" not in attrs:
+        p.append("sem o atributo Secure")
+    if attrs.get("path") != "/":
+        p.append(f"Path diferente de / ({attrs.get('path')!r})")
+    if "domain" in attrs:
+        p.append("com Domain (deve ser host-only)")
+    return p
+
+
+def problemas_cookie_jar(ck):
+    """Confere o cookie como FICOU guardado no jar (http.cookiejar.Cookie)."""
+    if ck is None:
+        return ["ausente do jar"]
+    p = []
+    if not ck.secure:
+        p.append("guardado sem Secure (seria enviado também por HTTP)")
+    if not ck.value:
+        p.append("guardado vazio")
+    if ck.path != "/":
+        p.append(f"guardado com Path {ck.path!r}")
+    if ck.domain_specified or ck.domain.startswith("."):
+        p.append("guardado com Domain (deveria ser host-only)")
+    return p
+
+
+def set_cookies(h, nome):
+    return [v for v in (h.get_all("Set-Cookie") or []) if v.split("=", 1)[0].strip() == nome]
 
 
 class Recursos(html.parser.HTMLParser):
@@ -176,11 +237,116 @@ def cmd_cabecalhos(a):
     exigir("frame-ancestors 'none'" in (h.get("Content-Security-Policy") or ""), "CSP restritiva")
     exigir((h.get("X-Frame-Options") or "").upper() == "DENY", "X-Frame-Options: DENY")
     exigir("Server" not in h or "Caddy" not in h.get("Server", ""), "proxy não anuncia o servidor")
-    st, h, _ = c.chamar("GET", "/api/sessao/csrf")
-    csrf = [v for v in (h.get_all("Set-Cookie") or []) if v.startswith("XSRF-TOKEN=")]
-    exigir(st == 200 and csrf and "secure" in csrf[0].lower(), "cookie CSRF com Secure")
+    verificar_cookie_csrf(a)
     st, h, _ = c.chamar("GET", "/actuator/health")
     exigir(st == 200, "saúde pública só com UP/DOWN")
+
+
+def verificar_cookie_csrf(a):
+    """Cookie CSRF por HTTPS em três fases independentes. Só nomes e atributos são registrados; o valor
+    nunca é impresso.
+
+    O repositório de token (CookieCsrfTokenRepository) só emite Set-Cookie quando o token é CRIADO; com
+    o cookie já presente ele é reutilizado sem nova emissão. Por isso a emissão é verificada com um
+    cliente NOVO (jar vazio), e a reutilização não exige reemissão."""
+    # 1) Emissão inicial: cliente novo, jar vazio.
+    c = Cliente(a.base, a.ca)
+    exigir(c.cookie_obj(CSRF) is None, "emissão: cliente novo começa com o jar vazio")
+    st, h, _ = c.chamar("GET", "/api/sessao/csrf")
+    emitidos = set_cookies(h, CSRF)
+    exigir(st == 200 and emitidos, f"emissão: HTTP {st} com Set-Cookie {CSRF} ({len(emitidos)})")
+    for linha in emitidos:   # TODOS os emitidos precisam ser seguros
+        prob = problemas_set_cookie_csrf(linha)
+        exigir(not prob, f"emissão: Set-Cookie {CSRF} com Secure e Path=/, host-only " + (str(prob) if prob else ""))
+    # 2) Armazenamento: atributos do cookie efetivamente guardado no jar.
+    prob = problemas_cookie_jar(c.cookie_obj(CSRF))
+    exigir(not prob, f"armazenamento: cookie {CSRF} guardado como Secure, Path=/, host-only " + (str(prob) if prob else ""))
+    # 3) Reutilização: mesmo jar; reemissão NÃO é exigida, mas, se houver, também tem de ser segura.
+    st, h, _ = c.chamar("GET", "/api/sessao/csrf")
+    reemitidos = set_cookies(h, CSRF)
+    exigir(st == 200, f"reutilização: endpoint CSRF responde com o cookie existente (HTTP {st})")
+    info(f"reutilização: Set-Cookie {CSRF} reemitido: {'sim' if reemitidos else 'não'} (não exigido)")
+    for linha in reemitidos:
+        prob = problemas_set_cookie_csrf(linha)
+        exigir(not prob, "reutilização: cookie reemitido também Secure " + (str(prob) if prob else ""))
+    prob = problemas_cookie_jar(c.cookie_obj(CSRF))
+    exigir(not prob, "reutilização: cookie no jar continua Secure " + (str(prob) if prob else ""))
+    # O token guardado continua VÁLIDO: um POST com ele passa pelo CSRF e é recusado pela CREDENCIAL
+    # (401). 403 indicaria token rejeitado. O login é inexistente (não bloqueia ninguém).
+    st, _, _ = c.chamar("POST", "/api/sessao", {"login": "inexistente.csrf.reuso", "senha": "senha-ficticia-qualquer-3"})
+    exigir(st == 401, f"reutilização: token guardado aceito pelo CSRF; recusa por credencial (HTTP {st}; 403 = token inválido)")
+
+
+def cmd_validar_set_cookie(a):
+    linhas = [l.strip() for l in sys.stdin.read().splitlines() if l.strip()]
+    exigir(len(linhas) >= 1, f"ao menos uma linha Set-Cookie na entrada ({len(linhas)})")
+    for linha in linhas:
+        if linha.lower().startswith("set-cookie:"):
+            linha = linha.split(":", 1)[1].strip()
+        prob = problemas_set_cookie_csrf(linha)
+        nome, _, attrs = atributos_set_cookie(linha)
+        info(f"Set-Cookie {nome}: atributos {sorted(attrs)}; problemas {prob}")
+        if a.espera == "aceito":
+            exigir(not prob, f"validador ACEITA o Set-Cookie {nome}")
+        else:
+            exigir(bool(prob), f"validador REJEITA o Set-Cookie {nome} ({'; '.join(prob)})")
+
+
+def cmd_autoteste(_a):
+    """Regressão do validador, sem servidor: deve REJEITAR o que o teste antigo (substring) aceitava."""
+    import http.cookiejar as cj
+
+    def jar_cookie(secure, valor="x" * 8, path="/", dominio="localhost", dominio_espec=False):
+        return cj.Cookie(0, CSRF, valor, None, False, dominio, dominio_espec, False, path, True, secure,
+                         None, False, None, None, {})
+
+    aceitos = ["XSRF-TOKEN=abc123; Path=/; Secure",
+               "XSRF-TOKEN=abc123; Secure; Path=/",
+               "XSRF-TOKEN=abc123; path=/; secure; SameSite=Lax"]
+    rejeitados = {"XSRF-TOKEN=abc123; Path=/": "sem Secure",
+                  "XSRF-TOKEN=secure; Path=/": "'secure' só no valor",
+                  "XSRF-TOKEN=abc123; Path=/secure": "'secure' só no Path",
+                  "XSRF-TOKEN=abc123; Path=/; SameSite=Lax; Comment=Secure": "'Secure' como valor de outro atributo",
+                  "XSRF-TOKEN=abc123; Path=/api; Secure": "Path errado",
+                  "XSRF-TOKEN=abc123; Path=/; Secure; Domain=example.test": "com Domain",
+                  "XSRF-TOKEN=; Path=/; Secure; Max-Age=0": "remoção (valor vazio)",
+                  "OUTRO=abc123; Path=/; Secure": "nome errado"}
+    for l in aceitos:
+        exigir(not problemas_set_cookie_csrf(l), f"autoteste: aceita Set-Cookie válido ({l.split(';', 1)[1].strip()})")
+    for l, motivo in rejeitados.items():
+        exigir(bool(problemas_set_cookie_csrf(l)), f"autoteste: rejeita Set-Cookie {motivo}")
+    # O critério antigo ("secure" in linha.lower()) aceitava estes; o novo não.
+    antigo_falho = [l for l in ("XSRF-TOKEN=secure; Path=/", "XSRF-TOKEN=abc123; Path=/secure")
+                    if "secure" in l.lower() and problemas_set_cookie_csrf(l)]
+    exigir(len(antigo_falho) == 2, "autoteste: casos que o critério por substring aprovaria são reprovados")
+    exigir(not problemas_cookie_jar(jar_cookie(True)), "autoteste: aceita cookie guardado Secure")
+    exigir(bool(problemas_cookie_jar(jar_cookie(False))), "autoteste: rejeita cookie guardado sem Secure")
+    exigir(bool(problemas_cookie_jar(jar_cookie(True, valor=""))), "autoteste: rejeita cookie guardado vazio")
+    exigir(bool(problemas_cookie_jar(jar_cookie(True, dominio=".example.test", dominio_espec=True))),
+           "autoteste: rejeita cookie guardado com Domain")
+    exigir(bool(problemas_cookie_jar(None)), "autoteste: rejeita cookie ausente do jar")
+    # Cookie de sessão __Host-: mesmo princípio (atributos como tokens).
+    exigir(bool(problemas_cookie_sessao("__Host-FLUXO=secure; Path=/; HttpOnly; SameSite=Strict")),
+           "autoteste: rejeita cookie de sessão sem Secure ('secure' só no valor)")
+    exigir(not problemas_cookie_sessao("__Host-FLUXO=abc; Path=/; Secure; HttpOnly; SameSite=Strict"),
+           "autoteste: aceita cookie de sessão __Host- completo")
+
+
+def problemas_cookie_sessao(linha):
+    nome, tem_valor, attrs = atributos_set_cookie(linha)
+    p = []
+    if not nome.startswith("__Host-") or not tem_valor:
+        p.append("nome sem __Host- ou valor vazio")
+    for at in ("secure", "httponly"):
+        if at not in attrs:
+            p.append(f"sem {at}")
+    if attrs.get("samesite", "").lower() != "strict":
+        p.append("SameSite diferente de Strict")
+    if attrs.get("path") != "/":
+        p.append("Path diferente de /")
+    if "domain" in attrs:
+        p.append("com Domain")
+    return p
 
 
 def cmd_primeiro_acesso(a):
@@ -188,9 +354,9 @@ def cmd_primeiro_acesso(a):
     sessao, h = c.entrar(a.login, ler(a.senha_arquivo), com_cabecalhos=True)
     exigir(sessao.get("deveTrocarSenha") is True and not sessao.get("permissoes"),
            "administrador inicial obrigado a trocar a senha (sem permissões até lá)")
-    sc = [v.lower() for v in (h.get_all("Set-Cookie") or []) if v.startswith("__Host-")]
-    exigir(sc and "secure" in sc[0] and "httponly" in sc[0] and "samesite=strict" in sc[0] and "path=/" in sc[0]
-           and "domain=" not in sc[0], "cookie de sessão __Host-, Secure, HttpOnly, SameSite=Strict, sem Domain")
+    sc = [v for v in (h.get_all("Set-Cookie") or []) if v.startswith("__Host-")]
+    prob = problemas_cookie_sessao(sc[0]) if sc else ["ausente"]
+    exigir(not prob, "cookie de sessão __Host-, Secure, HttpOnly, SameSite=Strict, sem Domain " + (str(prob) if prob else ""))
     st, _, corpo = c.chamar("GET", "/api/episodios")
     exigir(st == 403 and "TROCA_DE_SENHA_OBRIGATORIA" in corpo, "API recusa uso antes da troca de senha")
     st, _, _ = c.chamar("PUT", "/api/sessao/senha", {"senhaAtual": ler(a.senha_arquivo),
@@ -251,11 +417,14 @@ def cmd_sessao_antiga(a):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--base", required=True)
+    p.add_argument("--base", help="obrigatório, exceto para autoteste e validar-set-cookie")
     p.add_argument("--ca")
     p.add_argument("--diagnostico", help="arquivo onde gravar diagnóstico SANITIZADO em caso de falha")
     sub = p.add_subparsers(dest="cmd", required=True)
     sub.add_parser("cabecalhos")
+    sub.add_parser("autoteste")
+    s = sub.add_parser("validar-set-cookie")
+    s.add_argument("--espera", choices=("aceito", "rejeitado"), required=True)
     s = sub.add_parser("primeiro-acesso")
     s.add_argument("--login", required=True)
     s.add_argument("--senha-arquivo", required=True)
@@ -273,11 +442,14 @@ def main():
     s.add_argument("--entrada", required=True)
     s.add_argument("--espera", required=True)
     a = p.parse_args()
+    if a.cmd not in ("autoteste", "validar-set-cookie") and not a.base:
+        p.error("--base é obrigatório para este comando")
     global DIAGNOSTICO
     DIAGNOSTICO = a.diagnostico
     {"cabecalhos": cmd_cabecalhos, "primeiro-acesso": cmd_primeiro_acesso, "origem-forjada": cmd_origem_forjada,
      "criar-dados": cmd_criar_dados, "conferir-dados": cmd_conferir_dados,
-     "sessao-antiga": cmd_sessao_antiga}[a.cmd](a)
+     "sessao-antiga": cmd_sessao_antiga, "autoteste": cmd_autoteste,
+     "validar-set-cookie": cmd_validar_set_cookie}[a.cmd](a)
 
 
 if __name__ == "__main__":
