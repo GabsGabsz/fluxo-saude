@@ -78,10 +78,12 @@ Não acrescenta requisito funcional: atende RNF-001/004/009/012 e ERS §16 ("bac
 |---|---|---|
 | Ambiente reproduzível: imagem, banco persistente, migração separada (falha impede a aplicação), ordem de inicialização por saúde | `backend/Dockerfile`, `deploy/homologacao/compose.yaml`, `fluxo.sh subir` | job **Homologação** (subir; migração com falha em projeto isolado) |
 | Aplicação só com `fluxo_app`; banco sem porta publicada nem saída externa; segredos fora de imagem/Git/logs/artefatos | `compose.yaml`, `docker/entrypoint.sh`, `fluxo.sh preparar` | job **Homologação** (isolamento; nenhum segredo nos logs) |
-| HTTPS, proxy confiável explícito, cookies/CSRF/cabeçalhos | `Caddyfile`, `FLUXO_PROXY_CONFIAVEL` | `verificar.py cabecalhos`; X-Forwarded-For forjado via proxy e direto |
+| HTTPS, proxy confiável explícito, cookies/CSRF/cabeçalhos; página e recursos como navegador | `Caddyfile`, `FLUXO_PROXY_CONFIAVEL` | `verificar.py cabecalhos`; X-Forwarded-For forjado via proxy e direto, cada um com evento de auditoria correlacionado (`X-Correlation-Id`) e IP conferido |
 | Primeiro acesso (regras existentes; troca obrigatória); sem contas de demonstração por padrão | `fluxo.sh primeiro-acesso` (`admin-inicial.sql`, `GerarHashSenha`), `demo --confirmo-dados-ficticios` | `verificar.py primeiro-acesso` |
 | Backup e restauração comprovada (auditoria íntegra, sessões invalidadas, API conferida) | `fluxo.sh backup/restaurar` | job **Homologação**; relatório em `homologacao-evidencias`; lógica também executada localmente contra PostgreSQL real |
-| Persistência, banco indisponível, atualização com backup prévio | `fluxo.sh reiniciar/parar/subir/diagnostico/atualizar` | job **Homologação** |
+| Persistência, banco indisponível, atualização com backup prévio e migração separada | `fluxo.sh reiniciar/parar/subir/diagnostico/atualizar` | job **Homologação** |
+| Imagem identificada (ID, commit, migrações) no backup; restauração só com imagem compatível, validação sem migrar e estado final conferido | `fluxo.sh construir/backup/restaurar`, `Dockerfile` (`/app/migracoes.txt`) | job **Homologação**: backup em A → atualização B com avanço parcial → restauração com A em projeto separado (API: dados e sessão antiga recusada) |
+| Atualização malsucedida: sem avanço (aplicação anterior volta) × avanço parcial (aplicação parada) | `fluxo.sh atualizar`, `teste-atualizacao/` (migrações artificiais só do teste) | job **Homologação** |
 | Roteiro do piloto e impedimentos ao uso real | [`operacao/roteiro-homologacao.md`](operacao/roteiro-homologacao.md), [`operacao/impedimentos-uso-real.md`](operacao/impedimentos-uso-real.md) | avaliação humana (pendente) |
 
 ## Regras de negócio

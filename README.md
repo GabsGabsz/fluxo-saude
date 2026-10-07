@@ -61,12 +61,13 @@ Linux, ou Windows com Docker Desktop + WSL2 (executar dentro da distribuição W
 ```bash
 H=deploy/homologacao
 bash $H/fluxo.sh preparar                 # segredos aleatórios fora do Git
-bash $H/fluxo.sh subir                    # banco -> migração -> aplicação -> https://localhost:8443
+bash $H/fluxo.sh construir                # imagem com tag nova (commit no rótulo)
+bash $H/fluxo.sh subir                    # banco -> migração -> compatibilidade -> aplicação -> https://localhost:8443
 bash $H/fluxo.sh primeiro-acesso --unidade-codigo UPA_TESTE --unidade-nome "UPA Fictícia" \
   --admin-login admin.teste --admin-nome "Administrador Fictício"   # senha provisória exibida 1 vez
 bash $H/fluxo.sh backup                   # .dump + .manifesto + .sha256 (sem sessões)
-bash $H/fluxo.sh restaurar ARQ.dump       # em projeto SEPARADO; confere auditoria e contagens
-bash $H/fluxo.sh atualizar                # backup prévio + nova imagem + migração separada
+bash $H/fluxo.sh restaurar ARQ.dump       # projeto SEPARADO, imagem do backup; confere auditoria, contagens e estado final
+bash $H/fluxo.sh atualizar                # backup + manutenção + migração separada; trata avanço parcial
 bash $H/fluxo.sh diagnostico
 ```
 

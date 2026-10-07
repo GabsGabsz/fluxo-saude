@@ -81,13 +81,13 @@ Restrições:
    Nunca sobrescreve o original; a promoção é decisão humana. Como os gatilhos de auditoria são
    criados depois da carga dos dados (*post-data*), a restauração não gera registros espúrios e a
    cadeia permanece verificável.
-8. **Atualização:**
+8. **Atualização** (revisada no PR #12, §10):
    - backup obrigatório antes;
-   - imagem anterior preservada (`anterior-<data>`);
-   - migração separada.
+   - cada build recebe uma tag nova, e a imagem anterior continua disponível;
+   - aplicação e proxy ficam parados durante a migração separada;
+   - comparação das migrações aplicadas antes e depois da tentativa.
 
-   Reverter a aplicação só é possível se nenhuma migração nova foi aplicada, porque o Flyway recusa
-   versões desconhecidas. Caso contrário, restaura-se o banco. Não há rollback automático de migrações.
+   Não há rollback automático de migrações.
 9. **CI:** novo job "Homologação" que exercita o ambiente entregue:
    - build;
    - isolamento;
@@ -104,6 +104,53 @@ Restrições:
 
    O artefato contém só o relatório de restauração. O job SQL passou a usar o `psql` da imagem do
    runner: o merge do PR #11 teve o job cancelado por um `apt-get` travado, falha de infraestrutura.
+
+10. **Revisão do PR #12** (head `8371b30`; job Homologação falhou na página inicial).
+
+   **10.1 Página inicial.** A verificação pedia `GET /` com `Accept: application/json`. A página
+   inicial do Spring Boot (`WelcomePageHandlerMapping`) só é servida quando o `Accept` inclui
+   `text/html`; nos demais casos não há manipulador e o Spring responde 406.
+
+   Conclusão: defeito do **teste**, não da aplicação nem da segurança.
+   - A verificação agora pede a página como navegador e carrega os recursos estáticos (CSS, ícone,
+     `main.js` e módulos importados).
+   - Mantém as asserções de HSTS, CSP, frame, cookies e saúde.
+   - Registra, como diagnóstico, o status da mesma requisição com `Accept: application/json`, para o
+     CI confirmar a causa.
+   - Em caso de falha, grava diagnóstico sanitizado (status, Content-Type, cabeçalhos seguros, trecho
+     da resposta sem cookies nem tokens) e trechos de log sanitizados no artefato.
+
+   **10.2 Imagem compatível na recuperação.** A imagem é identificada pelo ID de conteúdo e pelo
+   commit (rótulo) e carrega o inventário das migrações (`/app/migracoes.txt`).
+   - O manifesto do backup registra o ID da imagem que atendia o banco e as migrações aplicadas.
+   - `restaurar` escolhe e verifica a imagem **antes** de qualquer migração: deve existir e embutir
+     exatamente as migrações do backup. Por padrão é a registrada; com `--imagem`, outra explícita.
+   - Ausente ou incompatível: recusa acionável, sem construir nem cair na tag atual.
+   - O projeto restaurado roda o Flyway com alvo `current` (só valida). O `subir` confere imagem ×
+     esquema antes da aplicação, e o estado final é conferido depois da subida.
+   - Ninguém constrói imagem implicitamente: `subir` usa `--no-build`.
+
+   **10.3 Avanço parcial.** Uma transação **por migração** não torna o lote atômico. `atualizar`
+   compara as migrações aplicadas antes e depois e distingue dois casos:
+   - **Falha sem avanço:** volta automaticamente à imagem anterior, cuja compatibilidade está
+     comprovada pela igualdade dos conjuntos.
+   - **Avanço parcial:** aplicação e proxy ficam **parados**, código 3 e relatório. As orientações são
+     correção para a frente ou restauração isolada com a imagem do backup.
+
+   O Flyway aceita uma imagem antiga sobre um esquema mais novo (ignora migrações "futuras"), por isso
+   a verificação de compatibilidade do `subir` é o que impede essa combinação. O CI testa os dois
+   casos com imagens derivadas que acrescentam migrações **artificiais exclusivas do teste**
+   (`deploy/homologacao/teste-atualizacao/`, V9001 que confirma e V9002 que falha). As migrações do
+   produto não são alteradas.
+
+   **10.4 Origem forjada.** Cada requisição de teste leva um `X-Correlation-Id` próprio, que a
+   aplicação adota e grava na auditoria.
+   - O CI exige o status esperado: 401 por credencial; 403 indicaria CSRF.
+   - Exige **exatamente um** evento com aquele identificador e confere o IP desse evento.
+   - Um autoteste mostra que a conferência reprova quando o evento não existe.
+   - No HTTP direto, o cookie CSRF não é `Secure`, porque segue `request.isSecure()`; por HTTPS, é.
+     Assim, a requisição direta passa pelo CSRF e chega à verificação de credencial, sem afrouxar a
+     configuração.
 
 ## Consequências
 

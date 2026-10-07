@@ -43,17 +43,23 @@ imagem, do Git, dos logs e dos artefatos do CI.
 git clone https://github.com/GabsGabsz/fluxo-saude.git && cd fluxo-saude
 H=deploy/homologacao
 bash $H/fluxo.sh preparar     # segredos aleatórios em deploy/homologacao/segredos/<projeto> (700)
-bash $H/fluxo.sh subir        # imagem -> banco -> MIGRAÇÃO -> aplicação -> proxy HTTPS
+bash $H/fluxo.sh construir    # imagem com tag NOVA (commit + data) e o commit no rótulo; passa a ser a do projeto
+bash $H/fluxo.sh subir        # banco -> MIGRAÇÃO -> compatibilidade -> aplicação -> proxy HTTPS
 ```
+
+A imagem do projeto fica em `ambientes/<projeto>.env` (`FLUXO_IMAGEM`). Nenhum comando além de
+`construir` e `atualizar` constrói imagem: `subir` e `restaurar` recusam imagem ausente.
 
 O `subir` só termina com sucesso se, nesta ordem:
 1. o banco ficar saudável;
-2. a migração terminar com código 0;
-3. a aplicação ficar saudável;
-4. `https://localhost:8443/actuator/health` responder `UP`.
+2. a migração (job separado) terminar com código 0;
+3. as migrações aplicadas no banco forem **exatamente** as embutidas na imagem (inventário
+   `/app/migracoes.txt` gerado no build). Isso é conferido **antes** de a aplicação subir;
+4. a aplicação ficar saudável usando a imagem configurada (ID conferido);
+5. `https://localhost:8443/actuator/health` responder `UP`.
 
-Se a migração falhar, a aplicação **não** é iniciada e o comando retorna erro com as últimas linhas
-do log da migração.
+Se a migração falhar ou a imagem não for compatível com o esquema, a aplicação e o proxy ficam
+**parados** e o comando retorna erro com as últimas linhas de log.
 
 **Opções de `preparar`** (cada projeto tem as suas):
 
@@ -138,6 +144,8 @@ do actuator é exposto.
 | `health` = 503 | Banco indisponível | `diagnostico`; `logs db`; com o banco de volta, a aplicação reconecta sozinha (o pool tenta de novo). |
 | Sem resposta em `:8443` | Proxy parado ou porta ocupada | `estado`; `logs proxy`. |
 | `subir` falha na migração | Senha do dono incorreta ou migração inválida | `logs migracao`. A aplicação continua parada (proposital). |
+| `subir` recusa: "imagem incompatível com o esquema" | Imagem não corresponde às migrações aplicadas (ex.: após avanço parcial) | §7. Nunca force a imagem antiga. |
+| `subir`/`restaurar` recusa: "imagem não existe" | Imagem não construída ou não carregada neste host | `construir` (projeto) ou reconstruir/`docker load` a imagem registrada no backup. |
 | Aplicação `unhealthy` | Banco ou credencial do `fluxo_app` | `logs app`. Os segredos ficam em `segredos/<projeto>/db_app`. |
 
 ## 5. Configuração segura (o que já está pronto e o que a implantação precisa)
@@ -180,7 +188,11 @@ bash $H/fluxo.sh backup --destino /caminho/protegido
 
 Gera três arquivos:
 - `fluxo-<projeto>-<UTC>.dump`: `pg_dump -Fc` de todo o banco `fluxo`. Inclui episódios, eventos, pendências, configurações, regras, usuários, lotações, permissões, auditoria e histórico de migrações.
-- `.manifesto`: versão da migração, contagens por tabela, hash da cabeça da cadeia de auditoria e problemas da cadeia. Lido no **mesmo instantâneo** do dump (snapshot exportado).
+- `.manifesto`, lido no **mesmo instantâneo** do dump (snapshot exportado):
+  - migrações aplicadas e versão do esquema;
+  - contagens por tabela;
+  - hash da cabeça da cadeia de auditoria e problemas da cadeia;
+  - **identidade imutável da imagem** que atendia o banco: ID do conteúdo `sha256:…` (não só a tag), commit do rótulo e migrações que ela embute.
 - `.sha256`: somas de verificação.
 
 **Os dados das sessões HTTP (`sessao.*`) são excluídos**: um identificador de sessão é uma credencial.
@@ -209,17 +221,26 @@ novos.
 
 ```bash
 bash $H/fluxo.sh restaurar deploy/homologacao/backups/fluxo-<projeto>-<UTC>.dump \
-  [--projeto-destino NOME] [--porta 9443] [--rede 172.31.241]
+  [--projeto-destino NOME] [--porta 9443] [--rede 172.31.241] [--imagem REF]
 ```
 
-1. Confere o SHA-256 e recusa arquivo alterado ou corrompido.
-2. Cria um projeto **novo e identificado** (padrão `<projeto>-recuperacao-<data>`), com volume, segredos e porta próprios.
+1. Confere o SHA-256 e exige o manifesto. Recusa arquivo alterado ou corrompido.
+2. **Escolhe e verifica a imagem de recuperação ANTES de qualquer processo de migração:**
+   - por padrão, usa a imagem registrada no backup (ID `sha256:…`); com `--imagem`, outra explicitamente informada;
+   - a imagem precisa existir no host **e** embutir exatamente as migrações aplicadas no backup;
+   - imagem ausente ou incompatível é recusada **antes de criar qualquer coisa**, com instruções: reconstruir a partir do commit registrado (`git checkout <commit> && fluxo.sh construir --tag … --sem-ativar`) ou `docker load` da imagem preservada;
+   - a tag atual do projeto **nunca** é usada por omissão e nada é construído.
+3. Cria um projeto **novo e identificado** (padrão `<projeto>-recuperacao-<data>`), com volume, segredos e porta próprios.
+   - A imagem escolhida é marcada como `fluxo-saude:recuperacao-<destino>`.
+   - O Flyway fica com alvo `current`: só **valida** o histórico e as somas, **nunca** migra para a frente. Restaurar e atualizar ficam separados.
    - Recusa se o destino já existir ou se for o próprio original. **Nada é sobrescrito; o original não é tocado.**
-3. `pg_restore --single-transaction --exit-on-error` no banco vazio criado pelo bootstrap.
-4. Verifica a **cadeia de auditoria** (`auditoria.verificar_cadeia()` sem problemas).
-5. Compara contagens, versão da migração e hash da cabeça da auditoria com o manifesto. Divergência interrompe a restauração.
-6. **Invalida sessões:** apaga qualquer linha de `sessao.spring_session`. O backup não as contém, mas um dump antigo poderia conter. O histórico de auditoria permanece intacto.
-7. Sobe migração (apenas validação) e aplicação. Grava o relatório `deploy/homologacao/relatorios/restauracao-<destino>.txt` (sem segredos).
+4. `pg_restore --single-transaction --exit-on-error` no banco vazio criado pelo bootstrap.
+5. Verifica a **cadeia de auditoria** (`auditoria.verificar_cadeia()` sem problemas).
+6. Compara contagens, migrações aplicadas e hash da cabeça da auditoria com o manifesto. Divergência interrompe a restauração.
+7. **Invalida sessões:** apaga qualquer linha de `sessao.spring_session`. O backup não as contém, mas um dump antigo poderia conter. O histórico de auditoria permanece intacto.
+8. Sobe a migração (só validação), confere a compatibilidade imagem × esquema e sobe a aplicação.
+9. Confere o **estado final**, depois da subida: o manifesto do banco continua idêntico e a aplicação em execução usa o ID da imagem escolhida.
+10. Grava o relatório `deploy/homologacao/relatorios/restauracao-<destino>.txt` (sem segredos), com imagem do backup, imagem de recuperação, imagem em execução, conferências e `estado_final`.
 
 Depois, confira pela API e pela tela, no endereço do projeto recuperado, os dados conhecidos.
 Exemplo do CI: `python3 $H/verificar.py --base https://localhost:9443 --ca ca.crt conferir-dados --entrada dados.json`.
@@ -234,26 +255,52 @@ Exemplo do CI: `python3 $H/verificar.py --base https://localhost:9443 --ca ca.cr
 
 ```bash
 git pull                          # ou checkout da versão aprovada
-bash $H/fluxo.sh atualizar
+bash $H/fluxo.sh atualizar        # ou: atualizar --imagem REF (imagem já construída/carregada)
 ```
 
-1. Faz um **backup obrigatório** antes de qualquer mudança.
-2. Preserva a imagem atual como `fluxo-saude:anterior-<data>`.
-3. Constrói a nova imagem.
-4. Executa `subir`: a **migração roda separada**, e a aplicação nova só sobe se ela terminar com sucesso.
+1. **Backup obrigatório**, com o manifesto registrando a imagem atual.
+2. Constrói a nova imagem (tag nova; a atual continua existindo) ou usa `--imagem`.
+3. Registra as migrações aplicadas **antes** e confere que coincidem com as da imagem atual.
+4. **Manutenção:** aplicação e proxy são **parados** antes de migrar. Nenhuma aplicação atende enquanto o esquema muda, porque a antiga pode não ser compatível com o esquema parcialmente migrado.
+5. Executa a **migração separada** com a nova imagem e registra as migrações aplicadas **depois**.
+6. Decide pelo resultado. Há um relatório em `relatorios/atualizacao-<projeto>-<UTC>.txt` (código 0, 1 ou 3).
 
-### Recuperação após atualização malsucedida
+| Resultado | Situação | O que o script faz | Código |
+|---|---|---|---|
+| `SUCESSO` | migração ok e esquema = migrações da imagem nova | ativa a nova imagem e sobe | 0 |
+| `FALHA_SEM_AVANCO` | migração falhou e as migrações aplicadas são **as mesmas de antes** | a compatibilidade da imagem anterior está **comprovada** (mesmo conjunto): restabelece a aplicação anterior e retorna erro | 1 |
+| `FALHA_COM_AVANCO_PARCIAL` | migração falhou **depois** de confirmar parte das migrações novas | **deixa aplicação e proxy parados**; nenhuma imagem disponível é comprovadamente compatível | 3 |
 
-- **A migração falhou.** Cada migração Flyway roda numa transação, e o PostgreSQL desfaz DDL e dados
-  daquela migração. O banco permanece na versão anterior e a aplicação nova não sobe.
-  - **Reverter a APLICAÇÃO:** em `ambientes/<projeto>.env`, troque `FLUXO_VERSAO=local` por `FLUXO_VERSAO=anterior-<data>` e rode `subir`.
-  - A migração da versão antiga só valida, porque não há migração nova aplicada.
-- **A migração passou, mas a versão nova tem defeito.** A aplicação antiga **não** pode simplesmente
-  voltar: o Flyway recusa iniciar com migrações aplicadas que ela não conhece, e esse bloqueio é
-  proposital.
-  - Opções: corrigir para a frente com nova versão e nova migração, ou **restaurar o banco** do backup feito por `atualizar`, num projeto separado, com a imagem anterior. Depois, promover esse projeto.
-  - Não há rollback automático de migrações; algumas são irreversíveis por natureza (ex.: dados transformados).
-- **A aplicação nova não fica saudável por outro motivo:** `diagnostico` e `logs app`, depois reverter a aplicação como acima, se o banco não mudou.
+### Por que pode haver avanço parcial
+
+O Flyway executa **cada migração** numa transação. O PostgreSQL desfaz a migração que falhou, mas
+**não** desfaz as anteriores, que já confirmaram. Numa atualização com V(n+1) e V(n+2), a primeira
+pode ficar aplicada e a segunda falhar. Por isso **não há rollback integral automático**: o CI
+demonstra esse caso com migrações artificiais exclusivas do teste (`teste-atualizacao/`).
+
+### Recuperação após falha com avanço parcial
+
+**Não** volte simplesmente para a imagem anterior. O Flyway a aceitaria, porque ignora migrações
+"futuras" por padrão, mas ela não conhece o esquema novo. O `subir` a recusa pela verificação de
+compatibilidade. Escolha uma das opções:
+
+- **Correção para a frente** (preferível quando o defeito está na migração ou no código novo): nova
+  imagem com as migrações corrigidas e `atualizar --imagem <corrigida>`. As migrações já aplicadas
+  não podem ser alteradas (o Flyway confere as somas); corrija com migrações novas.
+- **Restauração isolada** do backup feito no passo 1, com a imagem registrada nele:
+  `fluxo.sh restaurar <backup>`. Ela cria um projeto separado, valida o esquema sem migrar e confere
+  os dados. Depois de conferir, promova o projeto recuperado (§6).
+  - O original, com o esquema parcial, fica preservado para análise.
+  - Registros feitos **depois** do backup não estão nele (ver RPO, §6).
+
+### Falha sem avanço e outros casos
+
+- **Falha sem avanço:** o script já restabeleceu a aplicação anterior (compatibilidade comprovada).
+  Investigue a migração (`logs migracao`, relatório) antes de tentar de novo.
+- **A migração passou, mas a aplicação nova tem defeito:** não há reversão só da aplicação, porque o
+  esquema já é o da versão nova. Faça correção para a frente ou a restauração isolada acima.
+- Algumas migrações são irreversíveis por natureza (ex.: dados transformados). Nenhum procedimento
+  aqui promete desfazê-las.
 
 ## 8. Remoção (somente ambientes de teste)
 

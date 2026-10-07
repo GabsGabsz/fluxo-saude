@@ -77,7 +77,10 @@ unidade**, não regras fixas (RN-014, Anexo B.3). Cada item indica a validação
 | 70 | Backup lógico (`pg_dump -Fc`) do mesmo instantâneo do manifesto, **sem dados de sessão**; proposta: diário + antes de atualizar; retenção 7 diários/4 semanais/3 mensais; RPO até 24 h; RTO de algumas horas; restauração de teste mensal; cópias cifradas fora do servidor | `fluxo.sh backup`, `homologacao.md` §6 | V-08, V-10 |
 | 71 | Restauração sempre em projeto/volume separado; promoção é decisão humana; sessões restauradas invalidadas; todos entram de novo | `fluxo.sh restaurar` | V-10 |
 | 72 | Dados de demonstração só por comando explícito (contas com senhas públicas); nunca em ambiente acessível por terceiros | `fluxo.sh demo` | V-08 |
-| 73 | Sem rollback automático de migração: reverter a aplicação só sem migração nova aplicada; caso contrário, restaurar o banco | `homologacao.md` §7 | V-10 |
+| 73 | Sem rollback automático de migração. Uma transação **por migração** não torna a atualização atômica: falha **sem avanço** → volta a imagem anterior (compatibilidade comprovada pelo mesmo conjunto de migrações); falha **com avanço parcial** → aplicação parada; correção para a frente ou restauração isolada | `fluxo.sh atualizar`, `homologacao.md` §7 | V-10 |
+| 74 | Compatibilidade imagem × esquema = conjunto de migrações aplicadas **igual** ao embutido na imagem; conferida antes de subir a aplicação (o Flyway sozinho aceita imagem antiga sobre esquema mais novo) | `fluxo.sh subir`, `/app/migracoes.txt` | V-10 |
+| 75 | Recuperação usa a imagem registrada no backup (ID de conteúdo) ou outra explicitamente informada e compatível; nunca constrói nem usa a tag atual por omissão; Flyway com alvo `current` (só valida) no projeto restaurado | `fluxo.sh restaurar` | V-10 |
+| 76 | Atualização em janela de manutenção: aplicação e proxy parados durante a migração (indisponibilidade breve proposital) | `fluxo.sh atualizar` | V-10 |
 | 25 | **Limitação conhecida:** o contexto da transação (GUCs) pode ser definido pelo próprio papel da aplicação; as regras do banco não resistem a SQL arbitrário como `fluxo_app`. Proposta: contexto não forjável (etapa própria, afeta todas as políticas) | V1/V8 | V-10 |
 
 **Não decidido, e não deve ser decidido pelo desenvolvedor:** limites de alerta e SLA por etapa
