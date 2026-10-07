@@ -15,7 +15,7 @@ const menu = (page) => page.getByRole('navigation', { name: 'Telas' }).getByRole
 test('direção: só o painel coletivo, sem nomes de pacientes; Torre recusada', async ({ page, baseURL }) => {
   await entrar(page, 'direcao.e2e');
   await expect(page.getByRole('heading', { name: 'Painel coletivo' })).toBeVisible();
-  await expect(menu(page)).toHaveText(['Painel coletivo', 'Indicadores']);
+  await expect(menu(page)).toHaveText(['Painel coletivo', 'Indicadores', 'Relatórios']);
   await expect(page.locator('main table tbody tr').first()).toBeVisible();
   const texto = await page.locator('main').innerText();
   for (const p of FIX.pacientes) expect(texto).not.toContain(p.nome);

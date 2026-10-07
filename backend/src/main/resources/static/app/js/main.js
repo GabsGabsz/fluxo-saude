@@ -17,6 +17,7 @@ import * as telaUsuarios from './telas/usuarios.js';
 import * as telaRegras from './telas/regras.js';
 import * as telaPlantao from './telas/plantao.js';
 import * as telaIndicadores from './telas/indicadores.js';
+import * as telaRelatorios from './telas/relatorios.js';
 
 const TELAS = {
   torre: { modulo: telaTorre, permissao: 'EPISODIO_VER' },
@@ -28,6 +29,7 @@ const TELAS = {
   regras: { modulo: telaRegras, permissao: 'CONFIGURACAO_GERENCIAR' },
   plantao: { modulo: telaPlantao, permissao: 'PLANTAO_GERENCIAR' },
   indicadores: { modulo: telaIndicadores, permissao: 'INDICADORES_VER' },
+  relatorios: { modulo: telaRelatorios, permissao: 'INDICADORES_VER' },
   senha: { modulo: telaSenha, permissao: null },
 };
 
