@@ -6,11 +6,11 @@ quanto tempo aguardam, registra o gargalo atual, define a próxima ação e o re
 
 ## Estado atual — etapa 7 (passagem de plantão e indicadores) — em revisão no PR
 
-As etapas 4 a 6 (gestão de usuários, alertas e "Pacientes travados", interface web — PRs #6, #7 e #8) já estão incorporadas à `main`. Esta etapa acrescenta a **V16** (passagem de plantão e funções de indicadores) e a **V17** (registro das leituras nominais da passagem).
+As etapas 4 a 6 (gestão de usuários, alertas e "Pacientes travados", interface web — PRs #6, #7 e #8) já estão incorporadas à `main`. Esta etapa acrescenta a **V16** (passagem de plantão e funções de indicadores) a **V17** (registro das leituras nominais da passagem) e a **V18** (histórico imutável das versões das regras de alerta).
 
 | Camada | Conteúdo | Verificação |
 |---|---|---|
-| Banco (PostgreSQL 16) | Esquema do núcleo, regras críticas em `CHECK`/triggers, RLS por unidade (inclusive usuários e auditoria), auditoria imutável com cadeia SHA-256, login por funções controladas, observações (V9), margem de relógio (V10), gestão de usuários só por funções com alcance conferido (V11), versão de credencial conferida em toda transação (V12), regras de alerta e ciência (V13), ciência só na versão da regra vista (V14), unidades do próprio usuário para a interface (V15), passagem de plantão e indicadores (V16), registro de leituras nominais da passagem (V17) | `backend/src/test/sql` — 18 suítes + 6 testes de concorrência |
+| Banco (PostgreSQL 16) | Esquema do núcleo, regras críticas em `CHECK`/triggers, RLS por unidade (inclusive usuários e auditoria), auditoria imutável com cadeia SHA-256, login por funções controladas, observações (V9), margem de relógio (V10), gestão de usuários só por funções com alcance conferido (V11), versão de credencial conferida em toda transação (V12), regras de alerta e ciência (V13), ciência só na versão da regra vista (V14), unidades do próprio usuário para a interface (V15), passagem de plantão e indicadores (V16), registro de leituras nominais da passagem (V17), histórico das versões das regras de alerta (V18) | `backend/src/test/sql` — 20 suítes + 6 testes de concorrência |
 | Domínio (Java 21, sem framework) | `Episodio`, `Pendencia`, `FluxoConfigurado`, ajuste manual de horário, pseudônimo, UUIDv7 | 45 testes JUnit, incl. o cenário completo da ERS §11 |
 | Identidade (núcleo puro) | Política de senha, limitadores, matriz de permissões, serviço de autenticação | `ServicoAutenticacaoTest`, `MatrizPermissoesTest`, ... |
 | Casos de uso (núcleo puro) | `ServicoEpisodios`, `ServicoPendencias`, `ServicoConsultas`: permissão na unidade ativa, versão lida (409), ajuste manual de horário, painel pseudonimizado | `ServicosDeAplicacaoTest` (portas em memória) |
@@ -231,7 +231,7 @@ backend/
     identidade/           login, sessão, permissões, gestão de usuários (mesma divisão)
     alerta/               regras de alerta, "Pacientes travados", ciência (mesma divisão)
     configuracao/         Spring (relógio, segurança, montagem dos módulos)
-  src/main/resources/db/migration/   V1..V17 (Flyway)
+  src/main/resources/db/migration/   V1..V18 (Flyway)
   src/main/resources/static/         interface web (index.html, app/css, app/js/nucleo, app/js/telas)
   src/test/java/          testes de domínio, arquitetura e integração
   src/test/sql/           testes das garantias do banco

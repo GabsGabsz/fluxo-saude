@@ -1,6 +1,6 @@
 # ADR-0009 — Passagem de plantão e indicadores
 
-- **Status:** proposto (PR da etapa 7), implementado em `V16`, `V17` e nos módulos `plantao` e `indicador`; revisado no PR #10
+- **Status:** proposto (PR da etapa 7), implementado em `V16`, `V17`, `V18` e nos módulos `plantao` e `indicador`; revisado no PR #10
 - **Data:** 2026-10-07
 - **Requisitos:** M06 (RF-016, RF-017, CA-07, §10.4), M07 (RF-019, RF-020, CA-09, §10.5), RF-039 (parcial),
   RNF-002, RNF-003, RNF-014, RNF-015, RNF-017; pendências institucionais V-01, V-06, V-09
@@ -57,6 +57,9 @@ A ERS não define:
    - O domínio (`Comparacao`) considera alterado qualquer campo diferente. Assim, conteúdo entregue + mudanças exibidas reconstroem exatamente o conteúdo atual (`ComparacaoTest`).
    - A assinatura do recebimento cobre o conteúdo entregue, as diferenças e esse conteúdo atual, isto é, exatamente o que a tela mostra. Se algo muda antes do clique, a resposta é 409 `RECEBIMENTO_DESATUALIZADO`, sem efeito.
    - Os rótulos (nomes de etapa, setor, motivo e responsável) são lidos do cadastro atual na mesma consulta e não entram na assinatura; os identificadores e códigos que eles nomeiam entram.
+   - **Alertas (revisão do PR #10).** Quando os alertas de um caso mudam, a tela lista **cada** alerta, pareado por regra (e pendência, em "pendência vencida"): encerrado, novo, alterado (versão da regra, tipo, referência ou instante atingido) ou sem mudança — inclusive quando a quantidade é a mesma (A trocado por B). Cada lado mostra regra, versão, tipo, limite, ação esperada, referência, instante atingido e a pendência vinculada.
+   - **Regra na versão do alerta (V18).** O conteúdo guarda regra e versão; nome, limite e ação esperada vêm de `fluxo.regra_alerta_versao`, cópia imutável de cada versão gravada por gatilho a cada INSERT/UPDATE da regra. Nunca se usa a configuração atual no lugar da versão histórica: versão anterior ao histórico (só a vigente foi copiada na implantação da V18) aparece como "detalhes desta versão indisponíveis". A situação atual da regra (alterada ou desativada depois) aparece à parte, como aviso. Como versão é imutável e está na assinatura, os dados exibidos de cada alerta são cobertos por ela; uma nova versão depois da leitura muda o conteúdo atual e dá 409.
+   - A tela de plantão não lê mais `/api/config/regras-alerta`: os rótulos vêm na resposta da passagem, por versão, também no conteúdo entregue de passagens já recebidas ou canceladas.
    - A versão da passagem é conferida, o que impede duplo recebimento ou cancelamento.
    - A interface nunca reenvia sozinha: o envio fica bloqueado até "Recarregar dados".
 5. **O que fica registrado e o que é consultado.**
