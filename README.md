@@ -4,13 +4,13 @@ Plataforma de gestão operacional do fluxo assistencial: identifica pacientes pa
 quanto tempo aguardam, registra o gargalo atual, define a próxima ação e o responsável.
 **Não é prontuário e não substitui a regulação oficial.** Especificação: **ERS v1.1** (revisão técnica).
 
-## Estado atual — etapa 7 (passagem de plantão e indicadores) — em revisão no PR
+## Estado atual — etapa 8 (relatórios gerenciais, issue #9) — em revisão no PR
 
-As etapas 4 a 6 (gestão de usuários, alertas e "Pacientes travados", interface web — PRs #6, #7 e #8) já estão incorporadas à `main`. Esta etapa acrescenta a **V16** (passagem de plantão e funções de indicadores) a **V17** (registro das leituras nominais da passagem) e a **V18** (histórico imutável das versões das regras de alerta).
+As etapas 4 a 7 (gestão de usuários, alertas e "Pacientes travados", interface web, passagem de plantão e indicadores — PRs #6 a #10) já estão incorporadas à `main`. Esta etapa é uma **extensão aprovada do projeto** (issue #9), não um requisito da ERS original: acrescenta a **V19** (funções dos relatórios gerenciais sobre a linha do tempo), o módulo `relatorio` e a tela **Relatórios**.
 
 | Camada | Conteúdo | Verificação |
 |---|---|---|
-| Banco (PostgreSQL 16) | Esquema do núcleo, regras críticas em `CHECK`/triggers, RLS por unidade (inclusive usuários e auditoria), auditoria imutável com cadeia SHA-256, login por funções controladas, observações (V9), margem de relógio (V10), gestão de usuários só por funções com alcance conferido (V11), versão de credencial conferida em toda transação (V12), regras de alerta e ciência (V13), ciência só na versão da regra vista (V14), unidades do próprio usuário para a interface (V15), passagem de plantão e indicadores (V16), registro de leituras nominais da passagem (V17), histórico das versões das regras de alerta (V18) | `backend/src/test/sql` — 20 suítes + 6 testes de concorrência |
+| Banco (PostgreSQL 16) | Esquema do núcleo, regras críticas em `CHECK`/triggers, RLS por unidade (inclusive usuários e auditoria), auditoria imutável com cadeia SHA-256, login por funções controladas, observações (V9), margem de relógio (V10), gestão de usuários só por funções com alcance conferido (V11), versão de credencial conferida em toda transação (V12), regras de alerta e ciência (V13), ciência só na versão da regra vista (V14), unidades do próprio usuário para a interface (V15), passagem de plantão e indicadores (V16), registro de leituras nominais da passagem (V17), histórico das versões das regras de alerta (V18), relatórios gerenciais sobre a linha do tempo (V19) | `backend/src/test/sql` — 21 suítes + 6 testes de concorrência |
 | Domínio (Java 21, sem framework) | `Episodio`, `Pendencia`, `FluxoConfigurado`, ajuste manual de horário, pseudônimo, UUIDv7 | 45 testes JUnit, incl. o cenário completo da ERS §11 |
 | Identidade (núcleo puro) | Política de senha, limitadores, matriz de permissões, serviço de autenticação | `ServicoAutenticacaoTest`, `MatrizPermissoesTest`, ... |
 | Casos de uso (núcleo puro) | `ServicoEpisodios`, `ServicoPendencias`, `ServicoConsultas`: permissão na unidade ativa, versão lida (409), ajuste manual de horário, painel pseudonimizado | `ServicosDeAplicacaoTest` (portas em memória) |
@@ -18,7 +18,8 @@ As etapas 4 a 6 (gestão de usuários, alertas e "Pacientes travados", interface
 | Alertas (núcleo puro) | `MotorDeAlertas` (regras × estado do episódio × relógio do servidor), `ServicoAlertas` (travados, destaque, ciência, configuração) | `MotorDeAlertasTest` (fronteiras com relógio controlado), `ServicoAlertasTest` |
 | Aplicação (Spring Boot 4.1) | Login/sessão no servidor, CSRF SPA, revalidação no banco por transação, API REST de episódios/pendências/Torre e administração de usuários, erros padronizados; migração em job separado | `SessaoIT`, `EpisodiosIT` (cenário ERS §11 via HTTP), `GestaoUsuariosIT`, `SessaoSobreviventeIT`, `AlertasIT`, `CatalogoIT`, `InterfaceEstaticaIT`, `BancoDeDadosIT` (Testcontainers) |
 | Passagem de plantão e indicadores ([ADR-0009](docs/adr/0009-plantao-e-indicadores.md)) | Passagem entregue por um profissional e recebida por outro, confirmação condicionada ao conteúdo visto (assinatura SHA-256), sem passagem parcial; indicadores agregados no banco (retrato atual × histórico do período, fuso da unidade), dicionário com fórmulas propostas ([`docs/indicadores.md`](docs/indicadores.md)) | `t12`, `t13` (SQL), `ComposicaoPassagemTest`, `ServicoPlantaoTest`, `ServicoIndicadoresTest`, `PlantaoIT`, `IndicadoresIT`, E2E `08-plantao`, `09-indicadores` |
-| Interface web (ES modules, sem build — [ADR-0008](docs/adr/0008-interface-web.md)) | Login, troca de senha, unidade ativa, Torre de Controle, abrir episódio, detalhe do caso (etapa/desfecho, motivo, protocolo, destino, setor, observação, pendências, linha do tempo, ciência), Pacientes travados, painel pseudonimizado, usuários/lotações, regras de alerta | `backend/src/test/js` (`node --test`) e `e2e/` (Playwright contra o jar e o PostgreSQL reais) |
+| Relatórios gerenciais — extensão aprovada, issue #9 ([ADR-0010](docs/adr/0010-relatorios-gerenciais.md)) | Resumo, gargalos (etapa/setor/categoria, tempos reconstruídos da linha do tempo), pendências (com lista operacional nominal só para quem tem acesso nominal), evolução entre períodos e qualidade dos registros; um instantâneo do banco por relatório; tela, impressão (PDF pelo navegador) e CSV do MESMO resultado (assinatura SHA-256 + comprovante HMAC), exportação auditada, CSV protegido contra fórmulas; dicionário em [`docs/relatorios.md`](docs/relatorios.md) | `t16` (SQL, valores à mão), `ServicoRelatoriosTest`, `RelatoriosIT`, `RelatoriosConsistenciaIT`, `relatorios.test.mjs`, E2E `10-relatorios` |
+| Interface web (ES modules, sem build — [ADR-0008](docs/adr/0008-interface-web.md)) | Login, troca de senha, unidade ativa, Torre de Controle, abrir episódio, detalhe do caso (etapa/desfecho, motivo, protocolo, destino, setor, observação, pendências, linha do tempo, ciência), Pacientes travados, painel pseudonimizado, usuários/lotações, regras de alerta, passagem de plantão, indicadores, relatórios gerenciais | `backend/src/test/js` (`node --test`) e `e2e/` (Playwright contra o jar e o PostgreSQL reais) |
 
 Mapa requisito → código → teste: [`docs/rastreabilidade.md`](docs/rastreabilidade.md).
 Escolhas que precisam de validação com a equipe: [`docs/decisoes-a-validar.md`](docs/decisoes-a-validar.md).
@@ -34,6 +35,7 @@ Escolhas que precisam de validação com a equipe: [`docs/decisoes-a-validar.md`
 - [ADR-0007](docs/adr/0007-alertas-e-travados.md) — alertas operacionais calculados no servidor, "Pacientes travados", ciência
 - [ADR-0008](docs/adr/0008-interface-web.md) — interface web em ES modules sem build, mesma origem, estado só em memória, unidade esperada conferida no servidor
 - [ADR-0009](docs/adr/0009-plantao-e-indicadores.md) — passagem de plantão (entrega × recebimento, assinatura do conteúdo visto) e indicadores (funções SQL agregadas, dicionário proposto)
+- [ADR-0010](docs/adr/0010-relatorios-gerenciais.md) — relatórios gerenciais (extensão aprovada, issue #9): linha do tempo, instantâneo único, mesmo conjunto em tela/impressão/CSV, exportação auditada
 
 ## Rodando localmente
 
@@ -156,6 +158,15 @@ Indicadores (`INDICADORES_VER`; resposta só agregada, sem nomes; fórmulas prop
 |---|---|---|
 | GET | `/api/indicadores?inicio=AAAA-MM-DD&fim=AAAA-MM-DD&setor=` | retrato atual + histórico do período (datas locais da unidade, até 366 dias) |
 | GET | `/api/indicadores/dicionario` | dicionário de cálculo (RF-039) |
+
+Relatórios gerenciais (extensão aprovada, issue #9; `INDICADORES_VER`; lista nominal só com `EPISODIO_VER`; ver [ADR-0010](docs/adr/0010-relatorios-gerenciais.md)):
+
+| Método | Caminho | Uso |
+|---|---|---|
+| GET | `/api/relatorios/{resumo\|gargalos\|pendencias\|evolucao\|qualidade}?inicio=&fim=&setor=&etapa=&categoria=` | relatório calculado num único instantâneo (etapa só em gargalos; categoria em gargalos e pendências); traz `assinatura` e `comprovante` |
+| GET | `/api/relatorios/dicionario` | definições das seções (`relatorios-v1`, fórmulas propostas) |
+| POST | `/api/relatorios/exportacoes` | `{comprovante, formato: CSV\|IMPRESSAO}` → registra a exportação na auditoria (**201**); comprovante inválido → 422 `COMPROVANTE_INVALIDO`; calculado há mais de 2 h → 409 `RELATORIO_EXPIRADO` |
+
 | GET | `/api/catalogo` | configuração da unidade ativa para a interface: setores, etapas, transições, motivos, especialidades, profissionais (só para quem vê episódios ou gere usuários) |
 | GET | `/api/pacientes?cns=` · `?identificador=` | busca **exata** de paciente na unidade ativa (abrir episódio; auditada) |
 
@@ -230,15 +241,17 @@ backend/
     episodio/web/         API REST
     identidade/           login, sessão, permissões, gestão de usuários (mesma divisão)
     alerta/               regras de alerta, "Pacientes travados", ciência (mesma divisão)
+    plantao/ indicador/   passagem de plantão e indicadores (mesma divisão)
+    relatorio/            relatórios gerenciais (mesma divisão)
     configuracao/         Spring (relógio, segurança, montagem dos módulos)
-  src/main/resources/db/migration/   V1..V18 (Flyway)
+  src/main/resources/db/migration/   V1..V19 (Flyway)
   src/main/resources/static/         interface web (index.html, app/css, app/js/nucleo, app/js/telas)
   src/test/java/          testes de domínio, arquitetura e integração
   src/test/sql/           testes das garantias do banco
   src/test/js/            testes do núcleo da interface (node --test)
 e2e/                      testes de ponta a ponta (Playwright) + preparo do ambiente real com dados fictícios
 infra/db/init/            bootstrap de papéis/banco (dev, testes e referência p/ DBA)
-docs/                     ADRs, rastreabilidade, decisões a validar
+docs/                     ADRs, rastreabilidade, decisões a validar, dicionários (indicadores, relatórios)
 ```
 
 ## Próximas etapas (proposta)
@@ -248,5 +261,6 @@ docs/                     ADRs, rastreabilidade, decisões a validar
 3. ~~Gestão de usuários e lotações pelo administrador~~ (etapa 4, concluída).
 4. ~~Alertas/SLA e "Pacientes travados" (M04, RF-018, RN-006)~~ (etapa 5, concluída; escalonamento aguarda V-05/V-06).
 5. ~~Torre de Controle e telas operacionais~~ (etapa 6, concluída).
-6. ~~Passagem de plantão (M06) e indicadores (M07)~~ (etapa 7, em revisão; fórmulas oficiais aguardam V-09).
-7. A definir com a instituição: transporte (RF-024), exportação (RF-025), importação (RF-026), escalonamento (RF-023).
+6. ~~Passagem de plantão (M06) e indicadores (M07)~~ (etapa 7, concluída; fórmulas oficiais aguardam V-09).
+7. Relatórios gerenciais — extensão aprovada, issue #9 (etapa 8, em revisão; fórmulas aguardam V-09, supressão de grupos pequenos aguarda V-08).
+8. A definir com a instituição: transporte (RF-024), exportação (RF-025), importação (RF-026), escalonamento (RF-023).

@@ -49,6 +49,27 @@ Baseline: **ERS v1.1 (revisão técnica)**. Legenda: ✅ implementado e testado 
 | Menu por permissão; recusa no servidor; painel sem nomes | `main.js`, `estado.js` | E2E `06-perfis` |
 | Estático público só para GET; `/api/**` protegida | `SegurancaConfig` | `InterfaceEstaticaIT` |
 
+## Extensão aprovada — relatórios gerenciais (issue #9, etapa 8, ADR-0010)
+
+**Não são requisitos da ERS v1.1 original.** Os itens abaixo vêm da issue #9 (extensão aprovada do
+projeto); reaproveitam registros e definições de RF-019, RF-020 e RF-039, sem alterar seu status.
+A exportação CSV desta extensão **não** implementa o RF-025 (exportação), que continua a definir.
+
+| Item da issue #9 | Onde | Teste |
+|---|---|---|
+| Resumo gerencial (entradas, encerramentos por desfecho, estoque por etapa/setor, bloqueados, pendências abertas/vencidas, casos em alerta agora) | `fluxo.rel_resumo` (V19), `ServicoRelatorios` (alertas pelo `MotorDeAlertas`) | `t16`, `ServicoRelatoriosTest`, `RelatoriosIT` |
+| Gargalos por etapa, setor e categoria — tempos da linha do tempo (sem refazer do estado atual; espera no setor em que ocorreu; concluído × em curso; intervalos repetidos) | `fluxo.rel_intervalos`, `fluxo.rel_gargalos` | `t16` (valores à mão), `RelatoriosIT` (filtros de setor/etapa), E2E `10-relatorios` |
+| Acompanhamento de pendências (criadas, encerradas no prazo, abertas por categoria/criticidade/tipo de responsável, atraso) + lista operacional nominal só com acesso nominal, sem lista parcial (limite 2000), leitura auditada | `fluxo.rel_pendencias`, `fluxo.rel_pendencias_lista`, `registrar_consulta` | `t16`, `RelatoriosIT`, E2E `10-relatorios` |
+| Evolução entre períodos comparáveis (mesmo nº de dias locais; base zero sem %; alterações de regras informadas) | `fluxo.rel_metricas_periodo`, `fluxo.rel_mudancas_regras`, `nucleo/relatorios.js` | `t16`, `relatorios.test.mjs` |
+| Qualidade/atualidade (sem prazo oficial inventado; opcionais como cobertura, não falha; retroativos; causa não definida; linha do tempo) | `fluxo.rel_qualidade` | `t16` |
+| Fórmulas, população, denominador, marcos, exclusões, abertos, repetições, ausentes — propostas (V-09) | `DicionarioRelatorios`, [`docs/relatorios.md`](relatorios.md) | `ServicoRelatoriosTest` |
+| Tela integrada com filtros; cabeçalho com unidade, período, fuso, filtros, referência, geração, versão, nº de linhas, assinatura; limitações junto das seções | `telas/relatorios.js`, `nucleo/relatorios.js` | `relatorios.test.mjs`, E2E `10-relatorios` |
+| Tela, impressão e CSV = mesmo conjunto (um instantâneo; assinatura + comprovante HMAC; sem recálculo) | `ServicoRelatorios`, `TokenRelatorio`, `TransacaoRelatoriosJdbc` | `RelatoriosConsistenciaIT` (gravação concorrente durante a geração e a exportação), E2E `10-relatorios` |
+| Exportação auditada (ator, unidade, filtros, referências, sem conteúdo nominal); impressão "solicitada", não comprovada | `POST /api/relatorios/exportacoes`, `RegistroRelatoriosJdbc` | `RelatoriosIT`, `relatorios.test.mjs` |
+| CSV protegido contra injeção de fórmulas; PDF só pela impressão do navegador (A4 paisagem, cabeçalho repetido) | `nucleo/relatorios.js`, `app.css` (`@media print`) | `relatorios.test.mjs`, E2E `10-relatorios` (CSV e PDF de várias páginas) |
+| Direção só agregados; RLS; troca de unidade; sessão revogada | `ServicoRelatorios`, RLS (ADR-0004) | `t16` (RLS), `RelatoriosIT`, E2E `10-relatorios` |
+| Risco de reidentificação em grupos pequenos | limitação `GRUPOS_PEQUENOS` em todo relatório; política pendente | `decisoes-a-validar.md` (V-08) |
+
 ## Regras de negócio
 
 | Regra | Garantia |
