@@ -15,6 +15,12 @@ import { cronometro, dataHora, limite, bloqueio, avisoOperacional, situacaoRegra
 
 const INTERVALO_MS = 30000;
 
+// Mesmo formato que o domínio exige (ProtocoloExterno); o servidor continua validando.
+const PADRAO_SISTEMA = { pattern: '[A-Z0-9_]{2,32}', autocapitalize: 'characters', spellcheck: 'false' };
+const PADRAO_NUMERO = { pattern: '[A-Za-z0-9.\\/\\-]{1,60}', spellcheck: 'false' };
+const AJUDA_SISTEMA = 'Código do sistema oficial: letras maiúsculas, números e _ (ex.: SISREG).';
+const AJUDA_NUMERO = 'Letras, números, ponto, barra ou hífen.';
+
 export function montar(raiz, ctx, { id }) {
   const cat = ctx.catalogo();
   const fuso = ctx.fuso();
@@ -266,11 +272,12 @@ export function montar(raiz, ctx, { id }) {
     // Mantém o bloqueio atual por padrão: mudar de etapa não remove o motivo sem o usuário escolher.
     if (r.motivoId && motivosAtivos().some((m) => m.id === r.motivoId)) selMotivo.value = r.motivoId;
     const detalhe = h('input', { type: 'text', maxlength: '500', value: caso.motivoDetalhe || '' });
-    const sistema = h('input', { type: 'text', maxlength: '32' });
-    const numero = h('input', { type: 'text', maxlength: '60' });
+    const sistema = h('input', { type: 'text', maxlength: '32', ...PADRAO_SISTEMA });
+    const numero = h('input', { type: 'text', maxlength: '60', ...PADRAO_NUMERO });
     const justificativa = h('textarea', { maxlength: '1000' });
     const grupoMotivo = h('div', {}, campo('Motivo do bloqueio', selMotivo), campo('Detalhe do motivo', detalhe));
-    const grupoProtocolo = h('div', {}, campo('Sistema do protocolo', sistema), campo('Número do protocolo', numero));
+    const grupoProtocolo = h('div', {}, campo('Sistema do protocolo', sistema, AJUDA_SISTEMA),
+      campo('Número do protocolo', numero, AJUDA_NUMERO));
     const grupoJustificativa = h('div', {}, campo('Justificativa do desfecho', justificativa));
     const momento = campoMomento();
 
@@ -346,13 +353,13 @@ export function montar(raiz, ctx, { id }) {
 
   function formProtocolo() {
     const r = caso.resumo;
-    const sistema = h('input', { type: 'text', maxlength: '32', required: true, value: r.protocoloSistema || '' });
-    const numero = h('input', { type: 'text', maxlength: '60', required: true, value: r.protocoloNumero || '' });
+    const sistema = h('input', { type: 'text', maxlength: '32', required: true, value: r.protocoloSistema || '', ...PADRAO_SISTEMA });
+    const numero = h('input', { type: 'text', maxlength: '60', required: true, value: r.protocoloNumero || '', ...PADRAO_NUMERO });
     const momento = campoMomento();
     return registrar(criarFormulario({
       rotulo: 'Salvar protocolo',
       rotuloAcessivel: 'Protocolo',
-      campos: [campo('Sistema', sistema, 'Ex.: sistema estadual de regulação'), campo('Número', numero), momento.el],
+      campos: [campo('Sistema', sistema, AJUDA_SISTEMA), campo('Número', numero, AJUDA_NUMERO), momento.el],
       recarregar: recarregarForcado,
       enviar: async () => {
         await ctx.api.substituir(`/api/episodios/${id}/protocolo`, {
