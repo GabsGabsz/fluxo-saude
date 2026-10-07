@@ -142,10 +142,23 @@ final class RepositorioPlantaoJdbc implements RepositorioPlantao {
         return jdbc.sql(SELECT_PASSAGEM + " WHERE p.status = 'ENTREGUE'").query(RepositorioPlantaoJdbc::passagem).optional();
     }
 
+    /**
+     * Mesma regra do gatilho {@code tg_passagem_entrega} (início do período = entrega da última
+     * passagem RECEBIDA da unidade). Sem passagem recebida não há linha (vazio), em vez de um
+     * agregado nulo: {@code JdbcClient.single()} recusa resultado nulo. {@code entregue_em} é NOT
+     * NULL, então o mapeamento nunca devolve nulo. Índice: {@code passagem_historico_idx}.
+     */
     @Override
     public Optional<Instant> ultimaRecebidaEm() {
-        return Optional.ofNullable(jdbc.sql("SELECT max(entregue_em) FROM fluxo.passagem_plantao WHERE status = 'RECEBIDA'")
-            .query((rs, n) -> instante(rs, 1)).single());
+        List<Instant> ultima = jdbc.sql("""
+                SELECT entregue_em FROM fluxo.passagem_plantao
+                 WHERE status = 'RECEBIDA'
+                 ORDER BY entregue_em DESC
+                 LIMIT 1
+                """)
+            .query((rs, n) -> instante(rs, 1))
+            .list();
+        return ultima.isEmpty() ? Optional.empty() : Optional.of(ultima.get(0));
     }
 
     @Override
@@ -188,14 +201,18 @@ final class RepositorioPlantaoJdbc implements RepositorioPlantao {
     /** Relê o conteúdo gravado (jsonb) para o modelo do domínio, campo a campo. */
     @Override
     public Optional<ConteudoPassagem> conteudo(UUID id) {
-        Boolean existe = jdbc.sql("SELECT EXISTS (SELECT 1 FROM fluxo.passagem_conteudo WHERE passagem_id = ?)")
-            .param(id).query(Boolean.class).single();
-        if (!Boolean.TRUE.equals(existe)) {
+        // Sem .single() sobre valor possivelmente nulo: formato ausente vira -1 (recusado abaixo).
+        List<Integer> formato = jdbc.sql("SELECT (conteudo ->> 'formato')::int FROM fluxo.passagem_conteudo WHERE passagem_id = ?")
+            .param(id)
+            .query((rs, n) -> {
+                int v = rs.getInt(1);
+                return rs.wasNull() ? -1 : v;
+            })
+            .list();
+        if (formato.isEmpty()) {
             return Optional.empty();
         }
-        Integer formato = jdbc.sql("SELECT (conteudo ->> 'formato')::int FROM fluxo.passagem_conteudo WHERE passagem_id = ?")
-            .param(id).query(Integer.class).single();
-        if (formato == null || formato != ConteudoPassagem.VERSAO_FORMATO) {
+        if (formato.get(0) != ConteudoPassagem.VERSAO_FORMATO) {
             throw new IllegalStateException("formato de conteúdo de passagem desconhecido");
         }
         Map<UUID, List<ConteudoPassagem.AlertaPassagem>> alertas = new HashMap<>();

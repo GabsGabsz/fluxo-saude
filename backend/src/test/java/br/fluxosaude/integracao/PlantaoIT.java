@@ -32,6 +32,9 @@ class PlantaoIT extends IntegracaoBase {
     static UUID unidadeQ;
     static UUID setorP1;
     static UUID setorP2;
+    static UUID unidadeV;
+    static UUID unidadeC;
+    static UUID setorC;
     private static final AtomicBoolean PREPARADO = new AtomicBoolean();
 
     @Autowired
@@ -57,6 +60,13 @@ class PlantaoIT extends IntegracaoBase {
                 UUID multi = usuario(c, "coord.plantao", "Coordenacao Plantao", hash, unidadeP, "COORDENACAO_FLUXO");
                 lotar(c, multi, unidadeQ, "COORDENACAO_FLUXO");
                 usuario(c, "coord.q.plantao", "Coordenacao Q", hash, unidadeQ, "COORDENACAO_FLUXO");
+                // V: unidade sem nenhum episódio; C: período (sem recebida, só canceladas, recebida).
+                unidadeV = unidade(c, "UPA_PLANT_V", "UPA Plantao V");
+                unidadeC = unidade(c, "UPA_PLANT_C", "UPA Plantao C");
+                setorC = setor(c, unidadeC, "OBS_C", "Observacao C");
+                usuario(c, "enf.v.plantao", "Enfermagem V", hash, unidadeV, "ENFERMAGEM");
+                usuario(c, "enf.c.plantao", "Enfermagem C", hash, unidadeC, "ENFERMAGEM");
+                usuario(c, "med.c.plantao", "Medicina C", hash, unidadeC, "MEDICO");
                 assertTrue(adm != null);
                 c.commit();
             }
@@ -199,6 +209,67 @@ class PlantaoIT extends IntegracaoBase {
         exigir(200, adm.enviar("POST", "/api/admin/usuarios/" + texto(alvo.get("id")) + "/senha-provisoria",
                 "{\"versao\":" + alvo.get("versao").asInt() + "}"));
         exigir(401, med.enviar("GET", "/api/plantao/previa", null));
+    }
+
+    /**
+     * Início do período sem passagem RECEBIDA (revisão do PR #10, ponto 1): a primeira prévia de
+     * uma unidade respondia 500 porque o adaptador lia um agregado nulo com {@code single()}. Cobre
+     * unidade vazia, unidade com casos e sem recebida, unidade só com canceladas e unidade com
+     * recebida anterior — conferindo que a prévia e o gatilho do banco usam o mesmo início.
+     */
+    @Test
+    void periodoDaPrimeiraPassagemSemRecebidaComCanceladasEComRecebida() throws Exception {
+        // ---------------------------------------------------------------- unidade vazia
+        ClienteHttp enfV = cliente("enf.v.plantao");
+        JsonNode vazia = json.readTree(exigir(200, enfV.enviar("GET", "/api/plantao/previa", null)).body());
+        assertEquals(0, vazia.get("totais").get("casos").asInt());
+        assertEquals(0, vazia.get("casos").size());
+        assertTrue(vazia.get("periodoInicio").isNull(), "unidade vazia: sem passagem recebida");
+        assertTrue(vazia.get("pendente").isNull());
+        // Passagem de unidade vazia também é registrável (nada a continuar também é informação).
+        String vaziaId = texto(json.readTree(exigir(201, enfV.enviar("POST", "/api/plantao/passagens",
+                "{\"assinatura\":\"" + texto(vazia.get("assinatura")) + "\"}")).body()).get("id"));
+        JsonNode vaziaDetalhe = json.readTree(exigir(200, enfV.enviar("GET", "/api/plantao/passagens/" + vaziaId, null)).body());
+        assertTrue(vaziaDetalhe.get("passagem").get("periodoInicio").isNull());
+
+        // ---------------------------------------------------------------- casos, nenhuma passagem
+        ClienteHttp enf = cliente("enf.c.plantao");
+        ClienteHttp med = cliente("med.c.plantao");
+        abrir(enf, "Paciente Ficticio Periodo", setorC);
+        JsonNode previa = json.readTree(exigir(200, enf.enviar("GET", "/api/plantao/previa", null)).body());
+        assertEquals(1, previa.get("totais").get("casos").asInt());
+        assertTrue(previa.get("periodoInicio").isNull(), "casos sem passagem recebida");
+
+        // ---------------------------------------------------------------- só canceladas
+        String cancelada = texto(json.readTree(exigir(201, enf.enviar("POST", "/api/plantao/passagens",
+                "{\"assinatura\":\"" + texto(previa.get("assinatura")) + "\"}")).body()).get("id"));
+        exigir(204, enf.enviar("POST", "/api/plantao/passagens/" + cancelada + "/cancelamento",
+                "{\"versao\":0,\"justificativa\":\"Entregue por engano\"}"));
+        previa = json.readTree(exigir(200, enf.enviar("GET", "/api/plantao/previa", null)).body());
+        assertTrue(previa.get("periodoInicio").isNull(), "passagem cancelada não inicia período");
+        assertTrue(previa.get("pendente").isNull());
+
+        // ---------------------------------------------------------------- recebida anterior
+        String recebida = texto(json.readTree(exigir(201, enf.enviar("POST", "/api/plantao/passagens",
+                "{\"assinatura\":\"" + texto(previa.get("assinatura")) + "\"}")).body()).get("id"));
+        JsonNode aberta = json.readTree(exigir(200, med.enviar("GET", "/api/plantao/passagens/" + recebida, null)).body());
+        assertTrue(aberta.get("passagem").get("periodoInicio").isNull(), "gatilho: só canceladas antes");
+        exigir(204, med.enviar("POST", "/api/plantao/passagens/" + recebida + "/recebimento",
+                "{\"versao\":0,\"assinatura\":\"" + texto(aberta.get("assinaturaRecebimento")) + "\"}"));
+        String entregueEm = texto(json.readTree(exigir(200, med.enviar("GET", "/api/plantao/passagens/" + recebida, null))
+                .body()).get("passagem").get("entregueEm"));
+        previa = json.readTree(exigir(200, med.enviar("GET", "/api/plantao/previa", null)).body());
+        assertEquals(entregueEm, texto(previa.get("periodoInicio")), "período desde a entrega da última recebida");
+
+        // Uma cancelada MAIS NOVA que a recebida não muda o início; o gatilho do banco concorda.
+        String nova = texto(json.readTree(exigir(201, med.enviar("POST", "/api/plantao/passagens",
+                "{\"assinatura\":\"" + texto(previa.get("assinatura")) + "\"}")).body()).get("id"));
+        JsonNode novaDetalhe = json.readTree(exigir(200, med.enviar("GET", "/api/plantao/passagens/" + nova, null)).body());
+        assertEquals(entregueEm, texto(novaDetalhe.get("passagem").get("periodoInicio")), "prévia e gatilho: mesmo início");
+        exigir(204, med.enviar("POST", "/api/plantao/passagens/" + nova + "/cancelamento",
+                "{\"versao\":0,\"justificativa\":\"Refazer depois\"}"));
+        previa = json.readTree(exigir(200, enf.enviar("GET", "/api/plantao/previa", null)).body());
+        assertEquals(entregueEm, texto(previa.get("periodoInicio")));
     }
 
     // ----------------------------------------------------------------------------
