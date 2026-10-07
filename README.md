@@ -4,9 +4,9 @@ Plataforma de gestão operacional do fluxo assistencial: identifica pacientes pa
 quanto tempo aguardam, registra o gargalo atual, define a próxima ação e o responsável.
 **Não é prontuário e não substitui a regulação oficial.** Especificação: **ERS v1.1** (revisão técnica).
 
-## Estado atual — etapa 6 (interface web da Torre de Controle) — em revisão no PR
+## Estado atual — etapa 7 (passagem de plantão e indicadores) — em revisão no PR
 
-As etapas 4 (gestão de usuários, PR #6) e 5 (alertas e "Pacientes travados", PR #7) já estão incorporadas à `main`; as migrações vão até a **V15**.
+As etapas 4 a 6 (gestão de usuários, alertas e "Pacientes travados", interface web — PRs #6, #7 e #8) já estão incorporadas à `main`. Esta etapa acrescenta a **V16** (passagem de plantão e funções de indicadores).
 
 | Camada | Conteúdo | Verificação |
 |---|---|---|
@@ -17,6 +17,7 @@ As etapas 4 (gestão de usuários, PR #6) e 5 (alertas e "Pacientes travados", P
 | Gestão de usuários (núcleo puro) | `ServicoGestaoUsuarios`: alcance de lotação × alcance de conta, sem autoalteração, senha provisória, encerramento de sessões | `ServicoGestaoUsuariosTest` |
 | Alertas (núcleo puro) | `MotorDeAlertas` (regras × estado do episódio × relógio do servidor), `ServicoAlertas` (travados, destaque, ciência, configuração) | `MotorDeAlertasTest` (fronteiras com relógio controlado), `ServicoAlertasTest` |
 | Aplicação (Spring Boot 4.1) | Login/sessão no servidor, CSRF SPA, revalidação no banco por transação, API REST de episódios/pendências/Torre e administração de usuários, erros padronizados; migração em job separado | `SessaoIT`, `EpisodiosIT` (cenário ERS §11 via HTTP), `GestaoUsuariosIT`, `SessaoSobreviventeIT`, `AlertasIT`, `CatalogoIT`, `InterfaceEstaticaIT`, `BancoDeDadosIT` (Testcontainers) |
+| Passagem de plantão e indicadores ([ADR-0009](docs/adr/0009-plantao-e-indicadores.md)) | Passagem entregue por um profissional e recebida por outro, confirmação condicionada ao conteúdo visto (assinatura SHA-256), sem passagem parcial; indicadores agregados no banco (retrato atual × histórico do período, fuso da unidade), dicionário com fórmulas propostas ([`docs/indicadores.md`](docs/indicadores.md)) | `t12`, `t13` (SQL), `ComposicaoPassagemTest`, `ServicoPlantaoTest`, `ServicoIndicadoresTest`, `PlantaoIT`, `IndicadoresIT`, E2E `08-plantao`, `09-indicadores` |
 | Interface web (ES modules, sem build — [ADR-0008](docs/adr/0008-interface-web.md)) | Login, troca de senha, unidade ativa, Torre de Controle, abrir episódio, detalhe do caso (etapa/desfecho, motivo, protocolo, destino, setor, observação, pendências, linha do tempo, ciência), Pacientes travados, painel pseudonimizado, usuários/lotações, regras de alerta | `backend/src/test/js` (`node --test`) e `e2e/` (Playwright contra o jar e o PostgreSQL reais) |
 
 Mapa requisito → código → teste: [`docs/rastreabilidade.md`](docs/rastreabilidade.md).
@@ -32,6 +33,7 @@ Escolhas que precisam de validação com a equipe: [`docs/decisoes-a-validar.md`
 - [ADR-0006](docs/adr/0006-gestao-de-usuarios.md) — gestão de usuários: alcance por lotação × conta, autoalteração, último administrador, contas órfãs
 - [ADR-0007](docs/adr/0007-alertas-e-travados.md) — alertas operacionais calculados no servidor, "Pacientes travados", ciência
 - [ADR-0008](docs/adr/0008-interface-web.md) — interface web em ES modules sem build, mesma origem, estado só em memória, unidade esperada conferida no servidor
+- [ADR-0009](docs/adr/0009-plantao-e-indicadores.md) — passagem de plantão (entrega × recebimento, assinatura do conteúdo visto) e indicadores (funções SQL agregadas, dicionário proposto)
 
 ## Rodando localmente
 
@@ -137,6 +139,23 @@ retroativo além do limiar da unidade exige justificativa e a permissão `HORARI
 | PATCH | `/api/pendencias/{id}` | reatribui e/ou altera o prazo |
 | POST | `/api/pendencias/{id}/resolucao` · `/cancelamento` | encerra com texto obrigatório |
 | GET | `/api/painel` | painel coletivo pseudonimizado (sem nome/CNS) |
+
+Passagem de plantão (`PLANTAO_GERENCIAR` + acesso nominal; ver [ADR-0009](docs/adr/0009-plantao-e-indicadores.md)):
+
+| Método | Caminho | Uso |
+|---|---|---|
+| GET | `/api/plantao/previa` | conteúdo atual (todos os abertos, sem paginação) + `assinatura`, período e passagem pendente |
+| POST | `/api/plantao/passagens` | entrega `{assinatura, observacao}`; conteúdo mudou → **409** `PASSAGEM_DESATUALIZADA`; já há pendente → 409 `PASSAGEM_PENDENTE` |
+| GET | `/api/plantao/passagens` · `/api/plantao/passagens/{id}` | histórico; detalhe com o conteúdo entregue, diferenças desde a entrega e `assinaturaRecebimento` |
+| POST | `/api/plantao/passagens/{id}/recebimento` | `{versao, assinatura}` por OUTRO profissional; situação mudou → **409** `RECEBIMENTO_DESATUALIZADO` |
+| POST | `/api/plantao/passagens/{id}/cancelamento` | `{versao, justificativa}`, só quem entregou |
+
+Indicadores (`INDICADORES_VER`; resposta só agregada, sem nomes; fórmulas propostas — V-09):
+
+| Método | Caminho | Uso |
+|---|---|---|
+| GET | `/api/indicadores?inicio=AAAA-MM-DD&fim=AAAA-MM-DD&setor=` | retrato atual + histórico do período (datas locais da unidade, até 366 dias) |
+| GET | `/api/indicadores/dicionario` | dicionário de cálculo (RF-039) |
 | GET | `/api/catalogo` | configuração da unidade ativa para a interface: setores, etapas, transições, motivos, especialidades, profissionais (só para quem vê episódios ou gere usuários) |
 | GET | `/api/pacientes?cns=` · `?identificador=` | busca **exata** de paciente na unidade ativa (abrir episódio; auditada) |
 
@@ -212,7 +231,7 @@ backend/
     identidade/           login, sessão, permissões, gestão de usuários (mesma divisão)
     alerta/               regras de alerta, "Pacientes travados", ciência (mesma divisão)
     configuracao/         Spring (relógio, segurança, montagem dos módulos)
-  src/main/resources/db/migration/   V1..V15 (Flyway)
+  src/main/resources/db/migration/   V1..V16 (Flyway)
   src/main/resources/static/         interface web (index.html, app/css, app/js/nucleo, app/js/telas)
   src/test/java/          testes de domínio, arquitetura e integração
   src/test/sql/           testes das garantias do banco
@@ -228,5 +247,6 @@ docs/                     ADRs, rastreabilidade, decisões a validar
 2. ~~Casos de uso e API REST: episódio, etapas, pendências, linha do tempo~~ (etapa 3, concluída).
 3. ~~Gestão de usuários e lotações pelo administrador~~ (etapa 4, concluída).
 4. ~~Alertas/SLA e "Pacientes travados" (M04, RF-018, RN-006)~~ (etapa 5, concluída; escalonamento aguarda V-05/V-06).
-5. ~~Torre de Controle e telas operacionais~~ (etapa 6, em revisão).
-6. Passagem de plantão (M06) e indicadores (M07).
+5. ~~Torre de Controle e telas operacionais~~ (etapa 6, concluída).
+6. ~~Passagem de plantão (M06) e indicadores (M07)~~ (etapa 7, em revisão; fórmulas oficiais aguardam V-09).
+7. A definir com a instituição: transporte (RF-024), exportação (RF-025), importação (RF-026), escalonamento (RF-023).

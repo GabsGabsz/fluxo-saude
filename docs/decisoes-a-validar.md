@@ -43,6 +43,14 @@ unidade**, não regras fixas (RN-014, Anexo B.3). Cada item indica a validação
 | 36 | A unidade ativa é da **sessão** (compartilhada entre abas do mesmo navegador): trocar numa aba recarrega as outras; requisição de aba desatualizada é recusada (409) | `InterceptadorSessao`, `main.js` | V-10 |
 | 37 | "Prazo expirado" no detalhe da pendência é só informação (relógio do servidor); alerta formal depende de regra `PENDENCIA_VENCIDA` configurada | `telas/episodio.js` | V-05 |
 | 38 | Navegadores suportados: versões atuais de Chrome, Edge, Firefox e Safari (ES modules); sem modo offline por segurança | ADR-0008 | V-10 |
+| 39 | Passagem de plantão: entrega por quem gerencia plantão (coordenação, enfermagem, médico); recebimento por **outro** profissional com a mesma permissão; uma pendente por unidade; **só o autor cancela**, com justificativa | `ServicoPlantao`, V16 | V-01, V-06 |
+| 40 | Composição: **todos** os episódios abertos; "crítico" = alerta operacional ativo ou pendência de criticidade operacional CRÍTICA; "transferência" = protocolo/destino registrados ou etapa Aceito/Transporte (não é risco clínico) | `ComposicaoPassagem` | V-01, V-07 |
+| 41 | Período da passagem = desde a entrega da última passagem RECEBIDA até esta entrega (sem horários de turno; RF-040 não implementado) | V16 (gatilho) | V-01 |
+| 42 | Limite técnico de 2000 casos na passagem: acima disso ela não é gerada (nunca parcial) | `ServicoPlantao.LIMITE_CASOS` | V-10 |
+| 43 | Indicadores: **todas as fórmulas são propostas** (dicionário em `docs/indicadores.md`); encerramento administrativo excluído da permanência; solicitação = etapa que exige protocolo externo; aceite = natureza ACEITO; 1ª solicitação → 1º aceite; último aceite → saída | `fluxo.ind_*` (V16) | V-09 |
+| 44 | "Acima do limite" histórico usa o limite VIGENTE das regras "tempo total" sem etapa (não o vigente na época) e o setor atual/final do episódio | `fluxo.ind_acima_dos_limites`, `fluxo.ind_motivos` | V-05, V-09 |
+| 45 | Período dos indicadores: datas locais da unidade, até 366 dias, sem datas futuras; sem supressão de contagens pequenas para a Direção (risco de reidentificação em unidades pequenas a avaliar) | `ServicoIndicadores` | V-08, V-09 |
+| 46 | Dicionário de indicadores **não configurável** pelo usuário nesta versão (RF-039 parcial): mudanças de fórmula exigem nova versão do sistema | `DicionarioIndicadores` | V-09 |
 | 25 | **Limitação conhecida:** o contexto da transação (GUCs) pode ser definido pelo próprio papel da aplicação; as regras do banco não resistem a SQL arbitrário como `fluxo_app`. Proposta: contexto não forjável (etapa própria, afeta todas as políticas) | V1/V8 | V-10 |
 
 **Não decidido, e não deve ser decidido pelo desenvolvedor:** limites de alerta e SLA por etapa

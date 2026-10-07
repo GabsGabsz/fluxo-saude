@@ -21,12 +21,12 @@ Baseline: **ERS v1.1 (revisão técnica)**. Legenda: ✅ implementado e testado 
 | RF-013 Atualizar/resolver pendência | M | ✅ | `reatribuir`, `alterarPrazo` (máx. 30 dias), `resolver`, `cancelar`; `PATCH /api/pendencias/{id}`, `POST …/resolucao`, `…/cancelamento` | ambos, `EpisodiosIT` |
 | RF-014 Linha do tempo append-only, correção = novo evento | M | ✅ | `evento_episodio` imutável; `corrige_evento_id` só no mesmo episódio; `GET /api/episodios/{id}` (caso + linha do tempo, consulta auditada, resposta limitada com `historicoTruncado`) | `t03`, `EpisodiosIT` |
 | RF-015 Desfecho configurável por unidade (v1.1) | M | ✅ | etapas de desfecho por unidade; `provisionar_unidade(…, p_internacao_encerra)` | `o02`, ambos |
-| RF-016 / 017 Passagem de plantão | M | ⬜ | — | — |
+| RF-016 / 017 Passagem de plantão | M | ✅ | `ServicoPlantao` (prévia, entrega por assinatura do conteúdo visto, recebimento por outro profissional com diferenças desde a entrega), V16 (`passagem_plantao`, `passagem_conteudo`, papel restritivo), tela `telas/plantao.js`, ADR-0009 | `ComposicaoPassagemTest`, `ServicoPlantaoTest`, `t12`, `PlantaoIT`, E2E `08-plantao` |
 | RF-018 Pacientes travados (regras configuráveis) | M | ✅ | `GET /api/travados`: só episódios abertos que violam regra ativa (tempo na etapa, tempo total, tempo bloqueado, sem atualização, pendência vencida), com tempos, motivo, pendências (próxima ação, responsável, prazo) e ação esperada; tela `telas/travados.js` (distingue "nenhuma regra" de "nenhum alerta") | `MotorDeAlertasTest`, `ServicoAlertasTest`, `t10`, `AlertasIT` |
 | RF-021 Alertas direcionados a usuário/setor/perfil | S | ⬜ | depende de V-06 (destinatários) | — |
 | RF-022 Ciência do alerta sem encerrar pendência | S | ✅ | `POST /api/episodios/{id}/alertas/ciencia`; `ciencia_alerta` imutável, auditada; por ocorrência e **versão da regra vista** (409 se mudou, V14) | `ServicoAlertasTest`, `t10`, `concorrencia-ciencia`, `AlertasIT` |
 | RF-023 Escalonamento após tempo configurado | S | ⬜ | depende de V-05/V-06 (níveis, destinatários, tempos) | — |
-| RF-019 / 020 Indicadores | M | ⬜ | eventos com horário do servidor como base | — |
+| RF-019 / 020 Indicadores | M | ✅ (fórmulas propostas, V-09) | funções `fluxo.ind_*` (V16): permanência média/mediana, acima dos limites configurados, motivos por intervalos de bloqueio; retrato atual × histórico; tela `telas/indicadores.js` | `t13` (valores à mão, fronteiras, fuso, vazio, base zero), `ServicoIndicadoresTest`, `IndicadoresIT`, E2E `09-indicadores` |
 | RF-027 Parametrizar etapas, motivos, encerramento | S | 🟡 | tabelas + provisionamento; **limites de alerta por unidade/etapa** (`/api/config/regras-alerta`, só Administrador, V13) ✅; tela de regras (`regras.js`) ✅; faltam telas de etapas/motivos e escalonamento | `t03`, `o02`, `t10`, `AlertasIT` |
 | RF-028 Observação operacional | S | ✅ | tabela `observacao` (V9, imutável, RLS, auditada com texto redigido) + evento só com a referência; `POST /api/episodios/{id}/observacoes` | `ServicosDeAplicacaoTest`, `t06`, `EpisodiosIT` |
 | RF-029 Busca | S | 🟡 | índice trigram do nome normalizado; busca **exata** por CNS/identificador para abrir episódio (`GET /api/pacientes`, auditada); busca por nome ⬜ | — |
@@ -34,7 +34,7 @@ Baseline: **ERS v1.1 (revisão técnica)**. Legenda: ✅ implementado e testado 
 | **RF-036** Concorrência sem sobrescrita silenciosa (v1.1) | M | ✅ | `versao` em todos os agregados; trigger `tg_versao` exige versão+1; API exige a `versao` lida → 409; `lock_timeout` 5 s → 409 | `t04`, `ServicosDeAplicacaoTest`, `EpisodiosIT` |
 | **RF-037** Reconciliação de cadastros duplicados (v1.1) | M | ✅ (banco) | `paciente.reconciliado_com_id`; duplicado preservado e imutável, não aceita novos episódios | `t04` |
 | **RF-038** Modo privacidade para TV (v1.1) | M | ✅ | `Pseudonimo`; `GET /api/painel` só devolve pseudônimo (sem nome, CNS ou ID do episódio); tela `painel.js` (E2E `06-perfis`: nenhum nome exibido) | `RegrasV11Test`, `EpisodiosIT` |
-| **RF-039** Dicionário de indicadores | S | ⬜ | — | — |
+| **RF-039** Dicionário de indicadores | S | 🟡 | dicionário explícito e versionado no código (`DicionarioIndicadores`, `GET /api/indicadores/dicionario`, [`docs/indicadores.md`](indicadores.md)); **configuração** pelo usuário ⬜ | `ServicoIndicadoresTest` |
 | **RF-040** Horário do servidor e fuso institucional | S | 🟡 | `registrado_em`/autoria pelo banco, `unidade.fuso_horario`; interface exibe no fuso da unidade e conta tempos pelo relógio do servidor (ADR-0008); turnos ⬜ | `t03`, `t04` |
 
 ## Interface web (etapa 6, ADR-0008)
@@ -85,7 +85,8 @@ Baseline: **ERS v1.1 (revisão técnica)**. Legenda: ✅ implementado e testado 
 | CA-01, 02, 03, 04, 08, 10, 12 | ✅ no domínio/banco e nas telas (E2E `03-episodio`, `04-conflito`) |
 | CA-11 | ✅ RLS por unidade + permissões por perfil na unidade ativa + revalidação no banco a cada transação; registro de outra unidade responde 404 (`EpisodiosIT`); administração restrita ao alcance da unidade/conta, revogação com sessão encerrada (`GestaoUsuariosIT`); telas: menu por permissão, troca de unidade sem mistura, unidade esperada conferida no servidor (E2E `02-unidades`, `06-perfis`, `07-resiliencia`) |
 | CA-05, CA-06 | ✅ na API e nas telas (destaque na Torre; painel de travados com tempo, motivo, responsável e ação esperada) — telas `torre.js`/`travados.js` (E2E `05-alertas`) (`AlertasIT`) |
-| CA-07, 09 | ⬜ |
+| CA-07 | ✅ composição automática de todos os episódios abertos com pendências e ações esperadas (`ComposicaoPassagem`, E2E `08-plantao`) |
+| CA-09 | ✅ tempos (permanência, solicitação→aceite, aceite→saída) e distribuição dos motivos (`t13`, `IndicadoresIT`, E2E `09-indicadores`) — fórmulas propostas (V-09) |
 
 ## Anexo B.3 — decisões que o desenvolvedor não deve tomar sozinho
 
