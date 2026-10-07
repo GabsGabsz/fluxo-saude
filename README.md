@@ -4,9 +4,23 @@ Plataforma de gestão operacional do fluxo assistencial: identifica pacientes pa
 quanto tempo aguardam, registra o gargalo atual, define a próxima ação e o responsável.
 **Não é prontuário e não substitui a regulação oficial.** Especificação: **ERS v1.1** (revisão técnica).
 
-## Estado atual — etapa 8 (relatórios gerenciais, issue #9) — em revisão no PR
+## Estado atual — etapa 9 (ambiente de homologação, operação e preparação do piloto) — em revisão no PR
 
-As etapas 4 a 7 (gestão de usuários, alertas e "Pacientes travados", interface web, passagem de plantão e indicadores — PRs #6 a #10) já estão incorporadas à `main`. Esta etapa é uma **extensão aprovada do projeto** (issue #9), não um requisito da ERS original: acrescenta a **V19** (funções dos relatórios gerenciais sobre a linha do tempo), o módulo `relatorio` e a tela **Relatórios**.
+As etapas 4 a 8 já estão incorporadas à `main`: gestão de usuários, alertas e "Pacientes travados",
+interface web, passagem de plantão, indicadores e relatórios gerenciais (PRs #6 a #11). Os relatórios
+são uma extensão aprovada (issue #9) e as pendências institucionais deles continuam abertas: fórmulas
+(V-09) e grupos pequenos (V-08).
+
+Esta etapa entrega o **ambiente completo de homologação com dados fictícios**
+([ADR-0011](docs/adr/0011-ambiente-de-homologacao.md)):
+- imagem da aplicação;
+- Compose com banco, migração separada, aplicação e proxy HTTPS;
+- primeiro acesso seguro;
+- backup e restauração comprovada;
+- atualização e diagnóstico;
+- [roteiro de homologação do piloto](docs/operacao/roteiro-homologacao.md).
+
+> **Não autoriza uso com pacientes reais.** Ver [decisões e limitações que impedem o uso real](docs/operacao/impedimentos-uso-real.md).
 
 | Camada | Conteúdo | Verificação |
 |---|---|---|
@@ -19,6 +33,7 @@ As etapas 4 a 7 (gestão de usuários, alertas e "Pacientes travados", interface
 | Aplicação (Spring Boot 4.1) | Login/sessão no servidor, CSRF SPA, revalidação no banco por transação, API REST de episódios/pendências/Torre e administração de usuários, erros padronizados; migração em job separado | `SessaoIT`, `EpisodiosIT` (cenário ERS §11 via HTTP), `GestaoUsuariosIT`, `SessaoSobreviventeIT`, `AlertasIT`, `CatalogoIT`, `InterfaceEstaticaIT`, `BancoDeDadosIT` (Testcontainers) |
 | Passagem de plantão e indicadores ([ADR-0009](docs/adr/0009-plantao-e-indicadores.md)) | Passagem entregue por um profissional e recebida por outro, confirmação condicionada ao conteúdo visto (assinatura SHA-256), sem passagem parcial; indicadores agregados no banco (retrato atual × histórico do período, fuso da unidade), dicionário com fórmulas propostas ([`docs/indicadores.md`](docs/indicadores.md)) | `t12`, `t13` (SQL), `ComposicaoPassagemTest`, `ServicoPlantaoTest`, `ServicoIndicadoresTest`, `PlantaoIT`, `IndicadoresIT`, E2E `08-plantao`, `09-indicadores` |
 | Relatórios gerenciais — extensão aprovada, issue #9 ([ADR-0010](docs/adr/0010-relatorios-gerenciais.md)) | Resumo, gargalos (etapa/setor/categoria, tempos reconstruídos da linha do tempo), pendências (com lista operacional nominal só para quem tem acesso nominal), evolução entre períodos e qualidade dos registros; um instantâneo do banco por relatório; tela, impressão (PDF pelo navegador) e CSV do MESMO resultado (assinatura SHA-256 + comprovante HMAC), exportação auditada, CSV protegido contra fórmulas; dicionário em [`docs/relatorios.md`](docs/relatorios.md) | `t16` (SQL, valores à mão), `ServicoRelatoriosTest`, `RelatoriosIT`, `RelatoriosConsistenciaIT`, `relatorios.test.mjs`, E2E `10-relatorios` |
+| Homologação ([ADR-0011](docs/adr/0011-ambiente-de-homologacao.md), [guia](docs/operacao/homologacao.md)) | `backend/Dockerfile`; `deploy/homologacao/compose.yaml` (db sem porta publicada, migração separada, aplicação só com `fluxo_app`, proxy HTTPS confiável); `fluxo.sh` (preparar, subir, primeiro acesso, demo explícito, backup consistente, restauração isolada com cadeia de auditoria e invalidação de sessões, atualização, diagnóstico) | job **Homologação** do CI (ambiente real, restauração conferida pela API) |
 | Interface web (ES modules, sem build — [ADR-0008](docs/adr/0008-interface-web.md)) | Login, troca de senha, unidade ativa, Torre de Controle, abrir episódio, detalhe do caso (etapa/desfecho, motivo, protocolo, destino, setor, observação, pendências, linha do tempo, ciência), Pacientes travados, painel pseudonimizado, usuários/lotações, regras de alerta, passagem de plantão, indicadores, relatórios gerenciais | `backend/src/test/js` (`node --test`) e `e2e/` (Playwright contra o jar e o PostgreSQL reais) |
 
 Mapa requisito → código → teste: [`docs/rastreabilidade.md`](docs/rastreabilidade.md).
@@ -35,9 +50,27 @@ Escolhas que precisam de validação com a equipe: [`docs/decisoes-a-validar.md`
 - [ADR-0007](docs/adr/0007-alertas-e-travados.md) — alertas operacionais calculados no servidor, "Pacientes travados", ciência
 - [ADR-0008](docs/adr/0008-interface-web.md) — interface web em ES modules sem build, mesma origem, estado só em memória, unidade esperada conferida no servidor
 - [ADR-0009](docs/adr/0009-plantao-e-indicadores.md) — passagem de plantão (entrega × recebimento, assinatura do conteúdo visto) e indicadores (funções SQL agregadas, dicionário proposto)
+- [ADR-0011](docs/adr/0011-ambiente-de-homologacao.md) — ambiente de homologação: Compose, segredos fora da imagem, proxy confiável explícito, backup/restauração isolada e atualização
 - [ADR-0010](docs/adr/0010-relatorios-gerenciais.md) — relatórios gerenciais (extensão aprovada, issue #9): linha do tempo, instantâneo único, mesmo conjunto em tela/impressão/CSV, exportação auditada
 
-## Rodando localmente
+## Ambiente de homologação (sistema completo, dados fictícios)
+
+Linux, ou Windows com Docker Desktop + WSL2 (executar dentro da distribuição WSL). Guia completo:
+[`docs/operacao/homologacao.md`](docs/operacao/homologacao.md).
+
+```bash
+H=deploy/homologacao
+bash $H/fluxo.sh preparar                 # segredos aleatórios fora do Git
+bash $H/fluxo.sh subir                    # banco -> migração -> aplicação -> https://localhost:8443
+bash $H/fluxo.sh primeiro-acesso --unidade-codigo UPA_TESTE --unidade-nome "UPA Fictícia" \
+  --admin-login admin.teste --admin-nome "Administrador Fictício"   # senha provisória exibida 1 vez
+bash $H/fluxo.sh backup                   # .dump + .manifesto + .sha256 (sem sessões)
+bash $H/fluxo.sh restaurar ARQ.dump       # em projeto SEPARADO; confere auditoria e contagens
+bash $H/fluxo.sh atualizar                # backup prévio + nova imagem + migração separada
+bash $H/fluxo.sh diagnostico
+```
+
+## Rodando localmente (desenvolvimento)
 
 Pré-requisitos: JDK 21, Maven 3.9+, Docker.
 
@@ -190,13 +223,19 @@ e os testes SQL abaixo. O Surefire executa `*Test`; o Failsafe executa `*IT` e f
 build falhar se houver erro. Os relatórios ficam em `backend/target/surefire-reports/`
 e `backend/target/failsafe-reports/`.
 
-No GitHub, o workflow **CI** executa os quatro jobs em cada push na `main` e em cada
-pull request. Também é possível iniciar em **Actions → CI → Run workflow** e escolher a
-branch. O resultado só é aprovado quando **Build + testes (Java 21)**, **Migrações + testes
-SQL (PostgreSQL 16)**, **Interface — testes de unidade (Node)** e **Interface — E2E
-(Playwright + aplicação + PostgreSQL 16 reais)** estiverem verdes. Os artefatos `testes-java`,
-`testes-sql` e `e2e-interface` guardam os relatórios por 14 dias, inclusive em caso de falha
-se os arquivos tiverem sido produzidos.
+No GitHub, o workflow **CI** executa cinco jobs em cada push na `main` e em cada pull request.
+Também é possível iniciar em **Actions → CI → Run workflow** e escolher a branch. O resultado só é
+aprovado quando todos estiverem verdes:
+- **Build + testes (Java 21)**;
+- **Migrações + testes SQL (PostgreSQL 16)**;
+- **Interface — testes de unidade (Node)**;
+- **Interface — E2E (Playwright + aplicação + PostgreSQL 16 reais)**;
+- **Homologação — ambiente completo**: imagem, Compose, HTTPS, proxy confiável, persistência,
+  banco indisponível, backup, restauração isolada conferida pela API, atualização e migração com falha.
+
+Os artefatos `testes-java`, `testes-sql`, `e2e-interface` e `homologacao-evidencias` guardam os
+relatórios por 14 dias, inclusive em caso de falha, se os arquivos tiverem sido produzidos. O
+artefato de homologação traz só o relatório de restauração: nunca backups nem segredos.
 
 Interface — núcleo (sem dependências, Node 22):
 
@@ -250,7 +289,9 @@ backend/
   src/test/sql/           testes das garantias do banco
   src/test/js/            testes do núcleo da interface (node --test)
 e2e/                      testes de ponta a ponta (Playwright) + preparo do ambiente real com dados fictícios
-infra/db/init/            bootstrap de papéis/banco (dev, testes e referência p/ DBA)
+infra/db/init/            bootstrap de papéis/banco (dev, homologação, testes e referência p/ DBA)
+deploy/homologacao/       Compose de homologação, Caddyfile, fluxo.sh (operação), verificar.py (API)
+docs/operacao/            guia de homologação, roteiro do piloto, impedimentos ao uso real
 docs/                     ADRs, rastreabilidade, decisões a validar, dicionários (indicadores, relatórios)
 ```
 
@@ -262,5 +303,6 @@ docs/                     ADRs, rastreabilidade, decisões a validar, dicionári
 4. ~~Alertas/SLA e "Pacientes travados" (M04, RF-018, RN-006)~~ (etapa 5, concluída; escalonamento aguarda V-05/V-06).
 5. ~~Torre de Controle e telas operacionais~~ (etapa 6, concluída).
 6. ~~Passagem de plantão (M06) e indicadores (M07)~~ (etapa 7, concluída; fórmulas oficiais aguardam V-09).
-7. Relatórios gerenciais — extensão aprovada, issue #9 (etapa 8, em revisão; fórmulas aguardam V-09, supressão de grupos pequenos aguarda V-08).
-8. A definir com a instituição: transporte (RF-024), exportação (RF-025), importação (RF-026), escalonamento (RF-023).
+7. ~~Relatórios gerenciais — extensão aprovada, issue #9~~ (etapa 8, incorporada; fórmulas aguardam V-09, supressão de grupos pequenos aguarda V-08).
+8. Ambiente de homologação, operação e preparação do piloto (etapa 9, em revisão; uso real depende das decisões em `docs/operacao/impedimentos-uso-real.md`).
+9. A definir com a instituição: transporte (RF-024), exportação (RF-025), importação (RF-026), escalonamento (RF-023).

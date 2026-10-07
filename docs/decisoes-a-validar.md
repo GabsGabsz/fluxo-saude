@@ -70,6 +70,14 @@ unidade**, não regras fixas (RN-014, Anexo B.3). Cada item indica a validação
 | 63 | Filtro de setor em fatos históricos: setor em vigor no instante do fato pela linha do tempo (registros retroativos: período pelo registro, setor pelo fato; a transferência pertence ao destino); fato sem setor determinável fica fora do filtro e é sinalizado, nunca atribuído ao setor atual. Transferências no mesmo instante: vale a ordem `ocorrido_em → registrado_em → id`; no início de um bloqueio, a transferência no mesmo instante prevalece (como em Gargalos/Evolução) | V20, V21 | V-09 |
 | 64 | Bloqueio = intervalo normalizado: mudar só o detalhe (mesmo motivo) não é novo bloqueio; categoria = a registrada no início do intervalo | V20 | V-04, V-09 |
 | 65 | Evolução: variação absoluta na unidade da métrica (contagem, minutos, pontos percentuais); variação relativa em % do anterior (ausente com zero; não se aplica a métricas em %) | `nucleo/relatorios.js` | V-09 |
+| 66 | Homologação por **Docker Compose** numa única máquina, uma instância da aplicação; Windows via Docker Desktop + WSL2 (mesmo script) | `deploy/homologacao`, ADR-0011 | V-10 |
+| 67 | HTTPS de homologação com CA interna do Caddy publicada só em 127.0.0.1; em implantação, certificado e domínio da instituição | `Caddyfile` | V-10 |
+| 68 | Aplicação aceita `X-Forwarded-*` **somente** do IP fixo do proxy (expressão exata); o proxy descarta os do cliente | `entrypoint.sh`, `Caddyfile` | V-10 |
+| 69 | Segredos em arquivos locais (dir. 700, arquivos 644 por exigência do bind mount); proposta para implantação: cofre institucional | `fluxo.sh preparar` | V-10 |
+| 70 | Backup lógico (`pg_dump -Fc`) do mesmo instantâneo do manifesto, **sem dados de sessão**; proposta: diário + antes de atualizar; retenção 7 diários/4 semanais/3 mensais; RPO até 24 h; RTO de algumas horas; restauração de teste mensal; cópias cifradas fora do servidor | `fluxo.sh backup`, `homologacao.md` §6 | V-08, V-10 |
+| 71 | Restauração sempre em projeto/volume separado; promoção é decisão humana; sessões restauradas invalidadas; todos entram de novo | `fluxo.sh restaurar` | V-10 |
+| 72 | Dados de demonstração só por comando explícito (contas com senhas públicas); nunca em ambiente acessível por terceiros | `fluxo.sh demo` | V-08 |
+| 73 | Sem rollback automático de migração: reverter a aplicação só sem migração nova aplicada; caso contrário, restaurar o banco | `homologacao.md` §7 | V-10 |
 | 25 | **Limitação conhecida:** o contexto da transação (GUCs) pode ser definido pelo próprio papel da aplicação; as regras do banco não resistem a SQL arbitrário como `fluxo_app`. Proposta: contexto não forjável (etapa própria, afeta todas as políticas) | V1/V8 | V-10 |
 
 **Não decidido, e não deve ser decidido pelo desenvolvedor:** limites de alerta e SLA por etapa

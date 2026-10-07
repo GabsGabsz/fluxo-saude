@@ -70,6 +70,20 @@ A exportação CSV desta extensão **não** implementa o RF-025 (exportação), 
 | Direção só agregados; RLS; troca de unidade; sessão revogada | `ServicoRelatorios`, RLS (ADR-0004) | `t16` (RLS), `RelatoriosIT`, E2E `10-relatorios` |
 | Risco de reidentificação em grupos pequenos | limitação `GRUPOS_PEQUENOS` em todo relatório; política pendente | `decisoes-a-validar.md` (V-08) |
 
+## Etapa 9 — homologação, operação e preparação do piloto (ADR-0011)
+
+Não acrescenta requisito funcional: atende RNF-001/004/009/012 e ERS §16 ("backups testados e plano de recuperação") no ambiente de homologação com dados fictícios.
+
+| Item | Onde | Teste |
+|---|---|---|
+| Ambiente reproduzível: imagem, banco persistente, migração separada (falha impede a aplicação), ordem de inicialização por saúde | `backend/Dockerfile`, `deploy/homologacao/compose.yaml`, `fluxo.sh subir` | job **Homologação** (subir; migração com falha em projeto isolado) |
+| Aplicação só com `fluxo_app`; banco sem porta publicada nem saída externa; segredos fora de imagem/Git/logs/artefatos | `compose.yaml`, `docker/entrypoint.sh`, `fluxo.sh preparar` | job **Homologação** (isolamento; nenhum segredo nos logs) |
+| HTTPS, proxy confiável explícito, cookies/CSRF/cabeçalhos | `Caddyfile`, `FLUXO_PROXY_CONFIAVEL` | `verificar.py cabecalhos`; X-Forwarded-For forjado via proxy e direto |
+| Primeiro acesso (regras existentes; troca obrigatória); sem contas de demonstração por padrão | `fluxo.sh primeiro-acesso` (`admin-inicial.sql`, `GerarHashSenha`), `demo --confirmo-dados-ficticios` | `verificar.py primeiro-acesso` |
+| Backup e restauração comprovada (auditoria íntegra, sessões invalidadas, API conferida) | `fluxo.sh backup/restaurar` | job **Homologação**; relatório em `homologacao-evidencias`; lógica também executada localmente contra PostgreSQL real |
+| Persistência, banco indisponível, atualização com backup prévio | `fluxo.sh reiniciar/parar/subir/diagnostico/atualizar` | job **Homologação** |
+| Roteiro do piloto e impedimentos ao uso real | [`operacao/roteiro-homologacao.md`](operacao/roteiro-homologacao.md), [`operacao/impedimentos-uso-real.md`](operacao/impedimentos-uso-real.md) | avaliação humana (pendente) |
+
 ## Regras de negócio
 
 | Regra | Garantia |
@@ -92,6 +106,10 @@ A exportação CSV desta extensão **não** implementa o RF-025 (exportação), 
 
 | RNF | Status |
 |---|---|
+| RNF-001 Segurança (sessão segura, criptografia em trânsito) | 🟡 sessão no servidor, `__Host-` Secure/HttpOnly/SameSite, CSRF (ADR-0002); HTTPS de homologação por proxy com IP confiável explícito, HSTS, banco sem porta publicada (etapa 9, ADR-0011; job **Homologação**); certificado/domínio institucional e SSO ⬜ |
+| RNF-004 Disponibilidade | 🟡 reinício automático dos serviços, saúde UP/DOWN com banco, diagnóstico (`fluxo.sh diagnostico`); metas dependem do contrato de implantação (V-10) ⬜ |
+| RNF-009 Continuidade (backups, recuperação, contingência documentados) | 🟡 backup consistente com manifesto e SHA-256, restauração **testada no CI** em ambiente isolado (cadeia de auditoria, contagens, sessões invalidadas, API conferida), atualização com backup prévio e procedimento de reversão ([`docs/operacao/homologacao.md`](operacao/homologacao.md)); frequência/retenção/RPO/RTO são propostas (V-10); ensaio humano com tempo medido ⬜ |
+| RNF-012 Observabilidade | 🟡 `/actuator/health` (UP/DOWN, sem detalhes), logs por serviço e `fluxo.sh diagnostico`; métricas e monitoramento externo ⬜ |
 | RNF-013 Credenciais (hash, MFA, sem compartilhamento) | 🟡 Argon2id + política NIST + bloqueio progressivo + limite de sessões ✅; credencial individual provisionada pelo administrador com senha provisória aleatória e troca obrigatória ✅; versão de credencial conferida em toda transação — sessão antiga recusada após troca/redefinição de senha mesmo sem remoção física, login concorrente recusado (V12; `t09`, `o03`, `concorrencia-credencial`, `ServicoAutenticacaoTest`, `SessaoSobreviventeIT`) ✅; MFA ⬜ |
 | RNF-014 Concorrência | ✅ `tg_versao` |
 | RNF-015 Privacidade visual | ✅ `Pseudonimo` + painel coletivo só pseudonimizado; nada nominal no armazenamento do navegador (ADR-0008) |
