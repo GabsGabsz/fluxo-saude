@@ -34,17 +34,48 @@ public class ExecutorTransacional {
     private static final Pattern CORRELACAO = Pattern.compile("^[A-Za-z0-9-]{1,64}$");
 
     private final TransactionTemplate transacao;
+    private final TransactionTemplate leituraConsistente;
     private final JdbcClient jdbc;
 
     public ExecutorTransacional(PlatformTransactionManager gerenciador, DataSource dataSource) {
         this.transacao = new TransactionTemplate(gerenciador);
         this.transacao.setIsolationLevel(TransactionDefinition.ISOLATION_READ_COMMITTED);
+        this.leituraConsistente = new TransactionTemplate(gerenciador);
+        this.leituraConsistente.setIsolationLevel(TransactionDefinition.ISOLATION_REPEATABLE_READ);
+        this.leituraConsistente.setReadOnly(true);
         this.jdbc = JdbcClient.create(dataSource);
     }
 
     public <T> T executar(ContextoRequisicao contexto, Function<JdbcClient, T> trabalho) {
         Objects.requireNonNull(contexto);
         return transacao.execute(status -> {
+            aplicar(contexto);
+            return trabalho.apply(jdbc);
+        });
+    }
+
+    /**
+     * Transação SOMENTE LEITURA em REPEATABLE READ (ADR-0009, revisão do PR #10, ponto 4): todas
+     * as consultas do trabalho veem o MESMO instantâneo do banco, tirado no primeiro comando. Para
+     * respostas compostas de várias consultas (indicadores), sem misturar estados de antes e depois
+     * de uma gravação concorrente.
+     *
+     * <p>Seguro para a cadeia de auditoria (ADR-0003) porque não pode gravar: {@code READ ONLY}
+     * recusa qualquer INSERT e o gatilho da cadeia recusa isolamento diferente de READ COMMITTED
+     * (falha fechada). Leitura pura em REPEATABLE READ não sofre erro de serialização. A
+     * revalidação da sessão ({@code fluxo.aplicar_contexto}) e o RLS valem igual, no mesmo
+     * instantâneo. O isolamento das demais transações não muda.
+     */
+    public <T> T executarLeituraConsistente(ContextoRequisicao contexto, Function<JdbcClient, T> trabalho) {
+        Objects.requireNonNull(contexto);
+        return leituraConsistente.execute(status -> {
+            // Primeiro comando: fixa o modo mesmo que o driver/pool não o tenha aplicado, e confere.
+            jdbc.sql("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY").update();
+            String modo = jdbc.sql("SELECT current_setting('transaction_isolation') || '/' || current_setting('transaction_read_only')")
+                .query(String.class).single();
+            if (!"repeatable read/on".equals(modo)) {
+                throw new IllegalStateException("leitura consistente indisponível: " + modo);
+            }
             aplicar(contexto);
             return trabalho.apply(jdbc);
         });
