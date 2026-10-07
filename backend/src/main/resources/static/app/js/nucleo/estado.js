@@ -56,7 +56,9 @@ export const TELAS = [
   { rota: 'torre', titulo: 'Torre de Controle', permissao: 'EPISODIO_VER' },
   { rota: 'travados', titulo: 'Pacientes travados', permissao: 'EPISODIO_VER' },
   { rota: 'abrir', titulo: 'Abrir episódio', permissao: 'EPISODIO_ABRIR' },
+  { rota: 'plantao', titulo: 'Passagem de plantão', permissao: 'PLANTAO_GERENCIAR' },
   { rota: 'painel', titulo: 'Painel coletivo', permissao: 'PAINEL_COLETIVO_VER' },
+  { rota: 'indicadores', titulo: 'Indicadores', permissao: 'INDICADORES_VER' },
   { rota: 'usuarios', titulo: 'Usuários', permissao: 'USUARIO_GERENCIAR' },
   { rota: 'regras', titulo: 'Regras de alerta', permissao: 'CONFIGURACAO_GERENCIAR' },
 ];

@@ -60,3 +60,7 @@ export function responsavel(p) {
   if (p.responsavel) return p.responsavel;
   return '—';
 }
+
+export const statusPassagem = mapa({ ENTREGUE: 'Aguardando recebimento', RECEBIDA: 'Recebida', CANCELADA: 'Cancelada' });
+
+export const dimensaoRetrato = mapa({ ETAPA: 'Etapa', MOTIVO: 'Motivo do bloqueio' });

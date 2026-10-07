@@ -15,7 +15,7 @@ const menu = (page) => page.getByRole('navigation', { name: 'Telas' }).getByRole
 test('direção: só o painel coletivo, sem nomes de pacientes; Torre recusada', async ({ page, baseURL }) => {
   await entrar(page, 'direcao.e2e');
   await expect(page.getByRole('heading', { name: 'Painel coletivo' })).toBeVisible();
-  await expect(menu(page)).toHaveText(['Painel coletivo']);
+  await expect(menu(page)).toHaveText(['Painel coletivo', 'Indicadores']);
   await expect(page.locator('main table tbody tr').first()).toBeVisible();
   const texto = await page.locator('main').innerText();
   for (const p of FIX.pacientes) expect(texto).not.toContain(p.nome);
@@ -44,7 +44,10 @@ test('administração: usuários e regras, sem acesso nominal a episódios', asy
 
 test('enfermagem: telas operacionais, sem administração', async ({ page }) => {
   await entrar(page, 'enf.e2e');
-  await expect(menu(page)).toHaveText(['Torre de Controle', 'Pacientes travados', 'Abrir episódio', 'Painel coletivo']);
+  await expect(menu(page)).toHaveText(['Torre de Controle', 'Pacientes travados', 'Abrir episódio', 'Passagem de plantão',
+    'Painel coletivo']);
   await page.goto('/#/usuarios');
+  await expect(page.getByRole('heading', { name: 'Acesso não permitido' })).toBeVisible();
+  await page.goto('/#/indicadores');
   await expect(page.getByRole('heading', { name: 'Acesso não permitido' })).toBeVisible();
 });
