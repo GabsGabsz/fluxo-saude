@@ -1,0 +1,131 @@
+# =============================================================================
+# Ambiente de HOMOLOGAÇÃO do Fluxo Saúde (dados fictícios; NÃO é produção nem autoriza uso com
+# pacientes reais). Operação pelo script deploy/homologacao/fluxo.sh — ver
+# docs/operacao/homologacao.md e docs/adr/0011-ambiente-de-homologacao.md.
+#
+#   db        PostgreSQL 16 com volume persistente; SEM porta publicada (rede interna "dados").
+#   migracao  job único (perfil "migracao"): o ÚNICO processo com a senha do papel dono.
+#   app       aplicação com o papel fluxo_app (RLS); só sobe se a migração terminar com sucesso.
+#   proxy     Caddy: HTTPS (CA interna de homologação) e único ponto publicado (127.0.0.1 por
+#             padrão). É o único endereço de onde a aplicação aceita X-Forwarded-*.
+#
+# Configuração não secreta: arquivo de ambiente do projeto (ambientes/<projeto>.env).
+# Segredos: arquivos em ${FLUXO_SEGREDOS} (fora do Git), montados como "secrets".
+# =============================================================================
+x-imagem-app: &imagem-app
+  image: fluxo-saude:${FLUXO_VERSAO:-local}
+  build:
+    context: ../../backend
+  read_only: true
+  tmpfs:
+    - /tmp
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg_superusuario
+      FLUXO_OWNER_PASSWORD_FILE: /run/secrets/db_dono
+      FLUXO_APP_PASSWORD_FILE: /run/secrets/db_app
+      FLUXO_DB: fluxo
+    secrets:
+      - pg_superusuario
+      - db_dono
+      - db_app
+    volumes:
+      # Bootstrap existente (papéis fluxo_owner/fluxo_app e banco "fluxo"), executado só na 1ª vez.
+      - ../../infra/db/init:/docker-entrypoint-initdb.d:ro
+      - dados:/var/lib/postgresql/data
+    networks:
+      - dados
+    healthcheck:
+      # TCP (127.0.0.1): durante o bootstrap inicial o servidor temporário só escuta no socket,
+      # então o banco só fica "saudável" depois que o bootstrap termina.
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d fluxo"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  migracao:
+    <<: *imagem-app
+    command: ["--spring.profiles.active=migracao"]
+    restart: "no"
+    environment:
+      FLUXO_DB_URL: jdbc:postgresql://db:5432/fluxo
+      FLUXO_DB_OWNER_PASSWORD_FILE: /run/secrets/db_dono
+    secrets:
+      - db_dono
+    networks:
+      - dados
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+
+  app:
+    <<: *imagem-app
+    restart: unless-stopped
+    environment:
+      FLUXO_DB_URL: jdbc:postgresql://db:5432/fluxo
+      FLUXO_DB_APP_PASSWORD_FILE: /run/secrets/db_app
+      FLUXO_PROXY_CONFIAVEL: ${FLUXO_REDE_PREFIXO:-172.31.240}.10
+    secrets:
+      - db_app        # só a credencial restrita; a do dono NÃO é montada aqui
+    networks:
+      - dados
+      - borda
+    depends_on:
+      migracao:
+        condition: service_completed_successfully   # migração com falha => aplicação não sobe
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8080 && printf 'GET /actuator/health HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && grep -q '\"status\":\"UP\"' <&3"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 90s
+
+  proxy:
+    image: caddy:2.8-alpine
+    restart: unless-stopped
+    environment:
+      FLUXO_DOMINIO: ${FLUXO_DOMINIO:-localhost}
+    ports:
+      - "${FLUXO_ENDERECO_PUBLICACAO:-127.0.0.1}:${FLUXO_PORTA_HTTPS:-8443}:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - proxy_dados:/data
+      - proxy_config:/config
+    networks:
+      borda:
+        ipv4_address: ${FLUXO_REDE_PREFIXO:-172.31.240}.10
+    depends_on:
+      app:
+        condition: service_healthy
+
+networks:
+  dados:
+    internal: true          # sem rota para fora: o banco não é alcançável do host nem da Internet
+  borda:
+    ipam:
+      config:
+        - subnet: ${FLUXO_REDE_PREFIXO:-172.31.240}.0/24
+
+volumes:
+  dados:
+  proxy_dados:
+  proxy_config:
+
+secrets:
+  pg_superusuario:
+    file: ${FLUXO_SEGREDOS:?defina FLUXO_SEGREDOS (use deploy/homologacao/fluxo.sh)}/pg_superusuario
+  db_dono:
+    file: ${FLUXO_SEGREDOS:?defina FLUXO_SEGREDOS}/db_dono
+  db_app:
+    file: ${FLUXO_SEGREDOS:?defina FLUXO_SEGREDOS}/db_app
