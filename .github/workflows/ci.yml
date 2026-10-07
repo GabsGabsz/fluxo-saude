@@ -160,3 +160,183 @@ jobs:
             e2e/aplicacao/
           if-no-files-found: warn
           retention-days: 14
+
+  homologacao:
+    name: Homologação — ambiente completo (Compose, HTTPS, backup e restauração)
+    runs-on: ubuntu-24.04   # fixo: ubuntu-latest migra para o Ubuntu 26 em 19/10/2026; atualizar de forma deliberada
+    timeout-minutes: 45
+    # Dados FICTÍCIOS. Segredos gerados no runner efêmero (fluxo.sh preparar); backups e segredos
+    # NUNCA são publicados como artefato — só o relatório de restauração (contagens e hash da auditoria).
+    env:
+      H: deploy/homologacao
+      BASE: https://localhost:8443
+      BASE_REC: https://localhost:9443
+    steps:
+      - uses: actions/checkout@v5
+      - name: Versões do Docker e do Compose
+        run: docker version --format '{{.Server.Version}}' && docker compose version
+      - name: Preparar projeto (segredos aleatórios fora do Git)
+        run: bash $H/fluxo.sh preparar
+      - name: Subir (imagem, banco, migração separada, aplicação, proxy HTTPS)
+        run: bash $H/fluxo.sh subir
+      - name: Isolamento — banco sem porta publicada; aplicação sem a credencial do dono
+        run: |
+          set -euo pipefail
+          dc() { docker compose -f $H/compose.yaml -p fluxo-homologacao --env-file $H/ambientes/fluxo-homologacao.env "$@"; }
+          falha() { echo "FALHOU: $*"; exit 1; }
+          [ -z "$(docker port "$(dc ps -q db)")" ] || falha "banco com porta publicada"
+          echo "ok: banco sem porta publicada"
+          dc exec -T app bash -c 'test ! -e /run/secrets/db_dono && test -z "${FLUXO_DB_OWNER_PASSWORD:-}" && test -z "${FLUXO_DB_OWNER_PASSWORD_FILE:-}"' \
+            || falha "aplicação com acesso à credencial do dono"
+          echo "ok: aplicação sem a credencial do dono"
+          [ "$(dc exec -T db psql -U postgres -d fluxo -At -c "SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname='fluxo_app'")" = "f" ] \
+            || falha "fluxo_app com superusuário/BYPASSRLS"
+          echo "ok: fluxo_app sem superusuário/BYPASSRLS"
+          docker pull -q busybox:1.36 >/dev/null
+          if docker run --rm --network fluxo-homologacao_dados busybox:1.36 nc -z -w 3 1.1.1.1 443; then falha "rede do banco com saída externa"; fi
+          echo "ok: rede do banco sem saída externa"
+      - name: CA de homologação do proxy
+        run: bash $H/fluxo.sh certificado "$RUNNER_TEMP/ca.crt"
+      - name: Primeiro acesso (unidade + administrador; troca de senha obrigatória)
+        run: |
+          set -euo pipefail
+          bash $H/fluxo.sh primeiro-acesso --unidade-codigo HOMOLOG --unidade-nome "Unidade Ficticia de Homologacao" \
+            --admin-login admin.homolog --admin-nome "Administrador Ficticio" --senha-em "$RUNNER_TEMP/senha-provisoria"
+          echo "::add-mask::$(cat "$RUNNER_TEMP/senha-provisoria")"
+          ( umask 077; openssl rand -hex 16 > "$RUNNER_TEMP/senha-nova" )
+          echo "::add-mask::$(cat "$RUNNER_TEMP/senha-nova")"
+          python3 $H/verificar.py --base $BASE --ca "$RUNNER_TEMP/ca.crt" primeiro-acesso --login admin.homolog \
+            --senha-arquivo "$RUNNER_TEMP/senha-provisoria" --nova-senha-arquivo "$RUNNER_TEMP/senha-nova"
+          if bash $H/fluxo.sh primeiro-acesso --unidade-codigo OUTRA --unidade-nome X --admin-login outro.adm --admin-nome Y; then
+            echo "FALHOU: segundo 'primeiro acesso' deveria ser recusado"; exit 1
+          fi
+          echo "ok: segundo 'primeiro acesso' recusado"
+      - name: HTTPS, cabeçalhos de segurança e cookies
+        run: python3 $H/verificar.py --base $BASE --ca "$RUNNER_TEMP/ca.crt" cabecalhos
+      - name: Proxy confiável — X-Forwarded-For forjado não vira IP de origem
+        run: |
+          set -euo pipefail
+          dc() { docker compose -f $H/compose.yaml -p fluxo-homologacao --env-file $H/ambientes/fluxo-homologacao.env "$@"; }
+          ultimo_ip() { dc exec -T db psql -U postgres -d fluxo -At -c "SELECT host(origem_ip) FROM auditoria.registro WHERE acao = 'LOGIN_FALHA' ORDER BY id DESC LIMIT 1"; }
+          python3 $H/verificar.py --base $BASE --ca "$RUNNER_TEMP/ca.crt" origem-forjada --marcador "ci$GITHUB_RUN_ID"
+          ip="$(ultimo_ip)"; echo "via proxy: IP registrado = $ip"
+          if [ "$ip" = "203.0.113.99" ] || [[ "$ip" != 172.31.240.* ]] || [ "$ip" = "172.31.240.10" ]; then
+            echo "FALHOU: IP de origem incorreto via proxy"; exit 1
+          fi
+          # Direto na aplicação (sem o proxy), de outro contêiner da rede: cabeçalho NÃO é aceito.
+          docker run --rm --network fluxo-homologacao_borda curlimages/curl:8.10.1 sh -c '
+            curl -s -c /tmp/j -o /dev/null http://app:8080/api/sessao/csrf
+            t=$(awk "/XSRF-TOKEN/{print \$7}" /tmp/j)
+            curl -s -o /dev/null -w "%{http_code}\n" -b /tmp/j -H "X-XSRF-TOKEN: $t" -H "X-Forwarded-For: 198.51.100.7" \
+              -H "Content-Type: application/json" -d "{\"login\":\"inexistente.direto\",\"senha\":\"senha-ficticia-qualquer-2\"}" \
+              http://app:8080/api/sessao'
+          ip="$(ultimo_ip)"; echo "direto: IP registrado = $ip"
+          if [ "$ip" = "198.51.100.7" ] || [[ "$ip" != 172.31.240.* ]] || [ "$ip" = "172.31.240.10" ]; then
+            echo "FALHOU: cabeçalho forjado aceito direto na aplicação"; exit 1
+          fi
+      - name: Dados fictícios (ação explícita) e episódio identificável
+        run: |
+          set -euo pipefail
+          bash $H/fluxo.sh demo --confirmo-dados-ficticios
+          python3 $H/verificar.py --base $BASE --ca "$RUNNER_TEMP/ca.crt" criar-dados --marcador "ci$GITHUB_RUN_ID" \
+            --saida "$RUNNER_TEMP/dados.json"
+      - name: Persistência — reiniciar, parar e subir de novo
+        run: |
+          set -euo pipefail
+          V="python3 $H/verificar.py --base $BASE --ca $RUNNER_TEMP/ca.crt"
+          bash $H/fluxo.sh reiniciar
+          $V conferir-dados --entrada "$RUNNER_TEMP/dados.json"
+          $V sessao-antiga --entrada "$RUNNER_TEMP/dados.json" --espera 200
+          bash $H/fluxo.sh parar
+          bash $H/fluxo.sh subir
+          $V conferir-dados --entrada "$RUNNER_TEMP/dados.json"
+      - name: Diagnóstico — banco indisponível deixa a saúde DOWN e volta sozinho
+        run: |
+          set -euo pipefail
+          dc() { docker compose -f $H/compose.yaml -p fluxo-homologacao --env-file $H/ambientes/fluxo-homologacao.env "$@"; }
+          dc stop db
+          for i in $(seq 1 30); do
+            code=$(curl -sk -o /dev/null -w '%{http_code}' $BASE/actuator/health || true)
+            [ "$code" = "503" ] && break; sleep 2
+          done
+          echo "saúde com banco parado: HTTP $code"; [ "$code" = "503" ]
+          bash $H/fluxo.sh diagnostico | tee "$RUNNER_TEMP/diagnostico.txt"
+          grep -q "BANCO INDISPONÍVEL" "$RUNNER_TEMP/diagnostico.txt"
+          dc start db
+          bash $H/fluxo.sh subir
+      - name: Backup (pg_dump + manifesto + SHA-256)
+        run: |
+          set -euo pipefail
+          arq="$(bash $H/fluxo.sh backup --destino "$RUNNER_TEMP/backups" | tail -1)"
+          test -s "$arq"; stat -c '%a %n' "$RUNNER_TEMP/backups"/*
+          echo "BACKUP=$arq" >> "$GITHUB_ENV"
+      - name: Restauração em projeto ISOLADO e aplicação recuperada conferida pela API
+        run: |
+          set -euo pipefail
+          bash $H/fluxo.sh restaurar "$BACKUP" --projeto-destino fluxo-recuperacao --porta 9443 --rede 172.31.241
+          bash $H/fluxo.sh -p fluxo-recuperacao certificado "$RUNNER_TEMP/ca-rec.crt"
+          python3 $H/verificar.py --base $BASE_REC --ca "$RUNNER_TEMP/ca-rec.crt" conferir-dados --entrada "$RUNNER_TEMP/dados.json"
+          # Sessão do ambiente original: continua válida lá, mas NÃO vale no recuperado.
+          python3 $H/verificar.py --base $BASE --ca "$RUNNER_TEMP/ca.crt" sessao-antiga --entrada "$RUNNER_TEMP/dados.json" --espera 200
+          python3 $H/verificar.py --base $BASE_REC --ca "$RUNNER_TEMP/ca-rec.crt" sessao-antiga --entrada "$RUNNER_TEMP/dados.json" --espera 401
+          python3 $H/verificar.py --base $BASE --ca "$RUNNER_TEMP/ca.crt" conferir-dados --entrada "$RUNNER_TEMP/dados.json"
+          cat $H/relatorios/restauracao-fluxo-recuperacao.txt
+          grep -qx 'conferencia_manifesto=OK' $H/relatorios/restauracao-fluxo-recuperacao.txt
+          grep -qx 'auditoria_cadeia_problemas=0' $H/relatorios/restauracao-fluxo-recuperacao.txt
+          grep -qx 'sessoes_invalidadas=0' $H/relatorios/restauracao-fluxo-recuperacao.txt   # nenhuma sessão veio no backup
+          if bash $H/fluxo.sh restaurar "$BACKUP" --projeto-destino fluxo-recuperacao --porta 9444 --rede 172.31.244; then
+            echo "FALHOU: restauração sobrescreveu projeto existente"; exit 1
+          fi
+          echo "ok: restauração não sobrescreve projeto existente"
+      - name: Atualização com backup prévio e migração separada
+        run: |
+          set -euo pipefail
+          antes=$(ls "$H/backups" 2>/dev/null | grep -c '\.dump$' || true)
+          bash $H/fluxo.sh atualizar
+          depois=$(ls "$H/backups" | grep -c '\.dump$')
+          [ "$depois" -gt "$antes" ] || { echo "FALHOU: sem backup prévio"; exit 1; }
+          echo "ok: backup feito antes da atualização"
+          python3 $H/verificar.py --base $BASE --ca "$RUNNER_TEMP/ca.crt" conferir-dados --entrada "$RUNNER_TEMP/dados.json"
+      - name: Migração com falha impede a aplicação (projeto isolado)
+        run: |
+          set -euo pipefail
+          bash $H/fluxo.sh -p fluxo-falha preparar --porta 8445 --rede 172.31.243
+          bash $H/fluxo.sh -p fluxo-falha subir
+          bash $H/fluxo.sh -p fluxo-falha parar
+          openssl rand -hex 32 > "$H/segredos/fluxo-falha/db_dono"     # senha errada do dono
+          if bash $H/fluxo.sh -p fluxo-falha subir; then echo "a subida deveria falhar"; exit 1; fi
+          dcf() { docker compose -f $H/compose.yaml -p fluxo-falha --env-file $H/ambientes/fluxo-falha.env "$@"; }
+          [ "$(docker inspect -f '{{.State.ExitCode}}' "$(dcf ps -aq migracao)")" != "0" ]
+          [ -z "$(dcf ps -q --status running app)" ] || { echo "FALHOU: aplicação iniciada apesar da migração"; exit 1; }
+          echo "ok: migração falhou e a aplicação não foi iniciada"
+      - name: Nenhum segredo nos logs dos contêineres
+        if: always()
+        run: |
+          set -uo pipefail
+          for p in fluxo-homologacao fluxo-recuperacao fluxo-falha; do
+            [ -f $H/ambientes/$p.env ] || continue
+            docker compose -f $H/compose.yaml -p $p --env-file $H/ambientes/$p.env logs --no-color > "$RUNNER_TEMP/logs-$p.txt" 2>&1 || true
+            for s in $H/segredos/$p/*; do
+              if grep -qF "$(cat "$s")" "$RUNNER_TEMP/logs-$p.txt"; then echo "SEGREDO EM LOG: $p/$(basename "$s")"; exit 1; fi
+            done
+          done
+          for s in "$RUNNER_TEMP/senha-provisoria" "$RUNNER_TEMP/senha-nova"; do
+            [ -f "$s" ] && grep -qF "$(cat "$s")" "$RUNNER_TEMP"/logs-*.txt && { echo "SENHA EM LOG"; exit 1; }
+          done
+          echo "ok: nenhum segredo nos logs"
+      - name: Guardar evidências (sem backups nem segredos)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: homologacao-evidencias
+          path: |
+            deploy/homologacao/relatorios/
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Limpeza
+        if: always()
+        run: |
+          for p in fluxo-falha fluxo-recuperacao fluxo-homologacao; do
+            [ -f $H/ambientes/$p.env ] && bash $H/fluxo.sh -p $p remover --confirmo-apagar-dados || true
+          done
+          rm -rf "$RUNNER_TEMP/backups" "$RUNNER_TEMP"/senha-* "$H/backups"
