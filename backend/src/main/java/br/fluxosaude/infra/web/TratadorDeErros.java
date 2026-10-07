@@ -99,6 +99,13 @@ public class TratadorDeErros {
         return resposta(HttpStatus.CONFLICT, "CONFLITO_DE_VERSAO", e.getMessage(), req);
     }
 
+    /** O estado mudou desde a leitura (ex.: conteúdo da passagem de plantão): código específico. */
+    @ExceptionHandler(br.fluxosaude.compartilhado.ConflitoDeEstadoException.class)
+    ResponseEntity<ProblemDetail> conflitoDeEstado(br.fluxosaude.compartilhado.ConflitoDeEstadoException e,
+                                                   HttpServletRequest req) {
+        return resposta(HttpStatus.CONFLICT, e.codigo(), e.getMessage(), req);
+    }
+
     /** RF-036: escrita concorrente — versão, deadlock (40P01) ou espera de lock esgotada (55P03). */
     @ExceptionHandler(ConcurrencyFailureException.class)
     ResponseEntity<ProblemDetail> concorrencia(ConcurrencyFailureException e, HttpServletRequest req) {
