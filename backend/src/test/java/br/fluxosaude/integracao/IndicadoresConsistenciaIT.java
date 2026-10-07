@@ -77,44 +77,28 @@ class IndicadoresConsistenciaIT extends IntegracaoBase {
         ClienteHttp http = new ClienteHttp(Integer.parseInt(env.getRequiredProperty("local.server.port")));
         http.entrar("coord.snap", SENHA);
         String ep1 = abrir(http, "Paciente Ficticio Instantaneo Um", setor);
-        abrir(http, "Paciente Ficticio Instantaneo Dois", setor);
+        String ep2 = abrir(http, "Paciente Ficticio Instantaneo Dois", setor);
+        abrir(http, "Paciente Ficticio Instantaneo Tres", setor);
         UUID alta = idEtapa(unidade, "ALTA");
 
         UsuarioAutenticado coord = new UsuarioAutenticado(coordId, "coord.snap", "Coordenacao Instantaneo",
                 Map.of(unidade, Set.of(Papel.COORDENACAO_FLUXO)), unidade, false, credencialVersao(coordId));
         ContextoOrigem origem = new ContextoOrigem("127.0.0.1", "it-consistencia");
-        LocalDate hoje = LocalDate.now(ZoneId.of(FUSO));
-
-        // ---------------------------------------------------------------- leitura com gravação no meio
-        AtomicBoolean gravou = new AtomicBoolean();
+        LocalDate inicio = LocalDate.now(ZoneId.of(FUSO)).minusDays(1);
         TransacaoIndicadores real = new TransacaoIndicadoresJdbc(executor);
-        ServicoIndicadores servico = new ServicoIndicadores(comGravacaoAposDesfechos(real, () -> {
-            try {
-                exigir(200, http.enviar("PUT", "/api/episodios/" + ep1 + "/etapa",
-                        "{\"versao\":0,\"etapaId\":\"" + alta + "\"}"));
-                assertTrue(encerrado(ep1), "encerramento confirmado em outra conexão antes de continuar a leitura");
-                gravou.set(true);
-            } catch (Exception e) {
-                throw new IllegalStateException(e);
-            }
-        }), Clock.systemUTC());
-        ServicoIndicadores.Resultado r = servico.consultar(coord, origem, hoje.minusDays(1), hoje, null);
-        assertTrue(gravou.get(), "a gravação concorrente aconteceu no meio da resposta");
-        long desfechos = r.historico().desfechos().stream().mapToLong(RepositorioIndicadores.Desfecho::quantidade).sum();
-        long permanencia = r.historico().permanencia().incluidos() + r.historico().permanencia().naoIncluidos();
-        long saidas = r.historico().volumeDiario().stream().mapToLong(RepositorioIndicadores.Dia::saidas).sum();
-        assertEquals(0, desfechos, "desfechos lidos antes do encerramento");
-        assertEquals(desfechos, permanencia, "permanência no MESMO estado dos desfechos (não vê o encerramento)");
-        assertEquals(desfechos, saidas, "volume diário no MESMO estado dos desfechos");
-        assertEquals(2, abertos(r), "retrato no mesmo estado: os dois ainda abertos");
 
-        // ---------------------------------------------------------------- nova leitura: tudo vê o encerramento
-        ServicoIndicadores.Resultado depois = new ServicoIndicadores(real, Clock.systemUTC())
-                .consultar(coord, origem, hoje.minusDays(1), hoje, null);
-        assertEquals(1, depois.historico().desfechos().stream().mapToLong(RepositorioIndicadores.Desfecho::quantidade).sum());
-        assertEquals(1, depois.historico().permanencia().incluidos() + depois.historico().permanencia().naoIncluidos());
-        assertEquals(1, depois.historico().volumeDiario().stream().mapToLong(RepositorioIndicadores.Dia::saidas).sum());
-        assertEquals(1, abertos(depois));
+        // ---------------------------------------------------------------- 1) encerramento entre desfechos e o resto do histórico
+        ServicoIndicadores.Resultado r = consultarComEncerramento(real, coord, origem, inicio, http, ep1, alta, "desfechos");
+        assertEquals(new Contagens(0, 0, 0, 3), contagens(r),
+                "desfechos, permanência, saídas e abertos no MESMO estado (o encerramento concorrente não aparece em nenhum)");
+        assertEquals(new Contagens(1, 1, 1, 2), contagens(consultar(real, coord, origem, inicio)),
+                "nova leitura: o encerramento aparece em todos, junto");
+
+        // ---------------------------------------------------------------- 2) encerramento no início do retrato
+        // Logo após a primeira consulta do retrato (regras): retrato e histórico inteiros ainda no estado anterior.
+        r = consultarComEncerramento(real, coord, origem, inicio, http, ep2, alta, "regrasAtivas");
+        assertEquals(new Contagens(1, 1, 1, 2), contagens(r), "retrato e histórico no estado anterior ao 2º encerramento");
+        assertEquals(new Contagens(2, 2, 2, 1), contagens(consultar(real, coord, origem, inicio)));
 
         // A transação dos indicadores é somente leitura em REPEATABLE READ (e revalida a sessão).
         String modo = executor.executarLeituraConsistente(
@@ -127,27 +111,67 @@ class IndicadoresConsistenciaIT extends IntegracaoBase {
 
     // ----------------------------------------------------------------------------
 
+    record Contagens(long desfechos, long permanencia, long saidas, long abertos) {
+    }
+
+    private static Contagens contagens(ServicoIndicadores.Resultado r) {
+        return new Contagens(
+                r.historico().desfechos().stream().mapToLong(RepositorioIndicadores.Desfecho::quantidade).sum(),
+                r.historico().permanencia().incluidos() + r.historico().permanencia().naoIncluidos(),
+                r.historico().volumeDiario().stream().mapToLong(RepositorioIndicadores.Dia::saidas).sum(),
+                abertos(r));
+    }
+
+    /** Fim = hoje no fuso da unidade NO MOMENTO da consulta (sem falha se a virada do dia ocorrer no meio). */
+    private static ServicoIndicadores.Resultado consultar(TransacaoIndicadores t, UsuarioAutenticado u, ContextoOrigem o,
+                                                          LocalDate inicio) {
+        return new ServicoIndicadores(t, Clock.systemUTC()).consultar(u, o, inicio, LocalDate.now(ZoneId.of(FUSO)), null);
+    }
+
+    /** Consulta pela transação real; OUTRA requisição HTTP encerra {@code episodio} logo após a consulta {@code ponto}. */
+    private static ServicoIndicadores.Resultado consultarComEncerramento(TransacaoIndicadores real, UsuarioAutenticado u,
+            ContextoOrigem o, LocalDate inicio, ClienteHttp http, String episodio, UUID alta, String ponto) throws Exception {
+        AtomicBoolean gravou = new AtomicBoolean();
+        ServicoIndicadores.Resultado r = consultar(comGravacaoApos(real, ponto, () -> {
+            try {
+                exigir(200, http.enviar("PUT", "/api/episodios/" + episodio + "/etapa",
+                        "{\"versao\":0,\"etapaId\":\"" + alta + "\"}"));
+                assertTrue(encerrado(episodio), "encerramento confirmado em outra conexão antes de continuar a leitura");
+                gravou.set(true);
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
+            }
+        }), u, o, inicio);
+        assertTrue(gravou.get(), "a gravação concorrente aconteceu no meio da resposta (" + ponto + ")");
+        return r;
+    }
+
     private static long abertos(ServicoIndicadores.Resultado r) {
         return r.retrato().itens().stream().filter(i -> "ABERTOS".equals(i.dimensao()))
                 .mapToLong(RepositorioIndicadores.ItemRetrato::quantidade).sum();
     }
 
-    /** A transação real, com o repositório real decorado: executa {@code gravacao} logo após os desfechos. */
-    private static TransacaoIndicadores comGravacaoAposDesfechos(TransacaoIndicadores real, Runnable gravacao) {
+    /** A transação real, com o repositório real decorado: executa {@code gravacao} logo após a consulta {@code ponto}. */
+    private static TransacaoIndicadores comGravacaoApos(TransacaoIndicadores real, String ponto, Runnable gravacao) {
         return new TransacaoIndicadores() {
             @Override
             public <T> T executar(UsuarioAutenticado u, ContextoOrigem o, Function<RepositorioIndicadores, T> trabalho) {
-                return real.executar(u, o, r -> trabalho.apply(new Gancho(r, gravacao)));
+                return real.executar(u, o, r -> trabalho.apply(new Gancho(r, ponto, gravacao)));
             }
         };
     }
 
-    private record Gancho(RepositorioIndicadores r, Runnable gravacao) implements RepositorioIndicadores {
+    private record Gancho(RepositorioIndicadores r, String ponto, Runnable gravacao) implements RepositorioIndicadores {
+        private <T> T depois(String consulta, T valor) {
+            if (consulta.equals(ponto)) {
+                gravacao.run();
+            }
+            return valor;
+        }
+
         @Override
         public List<Desfecho> desfechos(UUID unidade, Periodo p, UUID setor) {
-            List<Desfecho> d = r.desfechos(unidade, p, setor);
-            gravacao.run();
-            return d;
+            return depois("desfechos", r.desfechos(unidade, p, setor));
         }
 
         @Override
@@ -202,7 +226,7 @@ class IndicadoresConsistenciaIT extends IntegracaoBase {
 
         @Override
         public List<RegraAlerta> regrasAtivas() {
-            return r.regrasAtivas();
+            return depois("regrasAtivas", r.regrasAtivas());
         }
 
         @Override

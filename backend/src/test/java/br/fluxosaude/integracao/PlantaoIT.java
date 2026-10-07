@@ -155,7 +155,13 @@ class PlantaoIT extends IntegracaoBase {
         assertTrue(velha.body().contains("RECEBIMENTO_DESATUALIZADO"));
         detalhe = json.readTree(exigir(200, med.enviar("GET", "/api/plantao/passagens/" + id, null)).body());
         assertEquals("ENTREGUE", texto(detalhe.get("passagem").get("status")), "nada confirmado");
-        assertEquals(pend, texto(detalhe.get("diferencas").get("pendenciasEncerradas").get(0)));
+        JsonNode encerrada = detalhe.get("diferencas").get("pendenciasEncerradas").get(0);
+        assertEquals(pend, texto(encerrada.get("id")));
+        assertEquals("ENCERRADO", texto(encerrada.get("tipo")));
+        assertEquals(ep1, texto(encerrada.get("episodioId")), "pendência encerrada ligada ao caso");
+        assertEquals("Acionar transporte", texto(encerrada.get("descricao")));
+        assertTrue(encerrada.get("atual").isNull(), "encerrada: só o valor da entrega");
+        assertEquals(setorP1.toString(), texto(encerrada.get("entregue").get("responsavelSetorId")));
         // Versão lida errada
         assertEquals(409, med.enviar("POST", "/api/plantao/passagens/" + id + "/recebimento",
                 "{\"versao\":5,\"assinatura\":\"" + texto(detalhe.get("assinaturaRecebimento")) + "\"}").statusCode());
