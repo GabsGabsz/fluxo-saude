@@ -1,6 +1,6 @@
 # ADR-0010 — Relatórios gerenciais
 
-- **Status:** proposto (PR #11 da etapa 8), implementado em `V19`, `V20` e no módulo `relatorio`; revisado no PR #11 (seção 8)
+- **Status:** proposto (PR #11 da etapa 8), implementado em `V19`, `V20`, `V21` e no módulo `relatorio`; revisado no PR #11 (seção 8)
 - **Data:** 2026-10-07
 - **Origem:** **extensão aprovada do projeto** (issue #9). Não é requisito da ERS v1.1 original.
   Reaproveita definições da etapa 7 (RF-019, RF-020, RF-039 — [ADR-0009](0009-plantao-e-indicadores.md)).
@@ -172,6 +172,11 @@ transferência. A V20 (nova migração; a V19 não é reescrita) substitui a fun
   `(ocorrido_em, registrado_em, id)`. A transferência pertence ao setor de destino.
 - **Bloqueios iniciados:** com filtro de setor, vale o setor em vigor no início do intervalo (uma
   transferência no mesmo instante prevalece, como nos pedaços de Gargalos).
+- **Desempate temporal (V21):** duas transferências com o mesmo `ocorrido_em` são ordenadas como em toda
+  a linha do tempo — `ocorrido_em → registrado_em → id`. A V20 desempatava o setor do início do bloqueio
+  pelo UUID textual do setor, o que podia atribuir o bloqueio a um setor já substituído. A V21 descarta os
+  intervalos de setor vazios (substituídos no mesmo instante, segundo a ordem de `rel_intervalos`) e ordena
+  só por instante e tipo; o identificador do setor não desempata nada. Teste `o06` (falha na V20).
 - **Sem setor determinável** (fato anterior ao primeiro evento de setor, ex.: registro legado sem evento
   de abertura): o fato fica **fora** do filtro e é contado em `SETOR_NAO_ATRIBUIDO`, com limitação. Nunca
   é atribuído ao setor atual.

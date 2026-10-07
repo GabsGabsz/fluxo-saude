@@ -8,7 +8,7 @@
 Fonte de verdade: `DicionarioRelatorios` (versão **`relatorios-v2`**). As definições usadas por um relatório vão
 **dentro do próprio resultado** (`definicoes`, cobertas pela assinatura) e aparecem junto de cada seção na tela,
 na impressão e no CSV; `GET /api/relatorios/dicionario` e o dicionário da tela são material complementar. A
-seção "Verbetes" abaixo é **gerada** da classe. Cálculo: funções `fluxo.rel_*` das migrações V19 e V20
+seção "Verbetes" abaixo é **gerada** da classe. Cálculo: funções `fluxo.rel_*` das migrações V19, V20 e V21
 ([ADR-0010](adr/0010-relatorios-gerenciais.md)); valores conferidos à mão em `backend/src/test/sql/t16_relatorios.sql`,
 `t17_relatorios_qualidade_historica.sql` e `RelatoriosIT`.
 
@@ -54,7 +54,8 @@ e fica **ausente** quando o denominador é zero.
   pela mesma definição.
 - **Fatos históricos × estoque (filtro de setor):** um fato do período (registro, início de bloqueio,
   criação/encerramento de pendência, entrada) vai para o setor em vigor **no instante do fato**, pela linha
-  do tempo; o estoque (abertos, atualidade, pendências abertas) usa o setor **atual**; encerramentos, o
+  do tempo — ordem `ocorrido_em → registrado_em → id`, inclusive entre transferências no mesmo instante
+  (nunca o identificador do setor); o estoque (abertos, atualidade, pendências abertas) usa o setor **atual**; encerramentos, o
   setor **final**. Uma transferência posterior não move o passado. Fato sem setor determinável fica **fora**
   do filtro e é sinalizado (`SETOR_NAO_ATRIBUIDO`) — nunca é atribuído ao setor atual.
 - **Registros retroativos:** dois marcos distintos — o **período** é o do registro (`registrado_em`); o
