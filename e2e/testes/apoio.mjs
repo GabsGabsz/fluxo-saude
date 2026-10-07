@@ -25,9 +25,15 @@ export async function entrar(page, login, senha = usuario(login).senha) {
 export async function escolherUnidade(page, nome) {
   const sel = page.getByLabel('Unidade ativa:');
   if ((await sel.locator('option:checked').textContent()) !== nome) {
-    await sel.selectOption({ label: nome });
+    // Só segue depois que o servidor confirmou a troca e a tela da nova unidade foi montada.
+    await Promise.all([
+      page.waitForResponse((r) => r.url().endsWith('/api/sessao/unidade') && r.request().method() === 'PUT' && r.ok()),
+      sel.selectOption({ label: nome }),
+    ]);
   }
-  await expect(sel.locator('option:checked')).toHaveText(nome);
+  await expect(page.getByLabel('Unidade ativa:').locator('option:checked')).toHaveText(nome);
+  await expect(page.getByLabel('Unidade ativa:')).toBeEnabled();
+  await expect(page.locator('main h1')).toBeVisible();
 }
 
 export async function capturar(page, nome) {
@@ -79,6 +85,13 @@ export async function clienteApi(baseURL, login, senha = usuario(login).senha) {
     fechar: () => ctx.dispose(),
   };
   return api;
+}
+
+/** Garante um episódio ABERTO do paciente (por CNS) na unidade ativa do cliente; idempotente. */
+export async function garantirEpisodio(api, { cns, nome, setorNome }) {
+  const torre = await api.get('/api/episodios');
+  const existente = torre.itens.find((l) => l.pacienteNome === nome);
+  return existente ? existente.episodioId : abrirEpisodio(api, { cns, setorNome });
 }
 
 /** Abre um episódio pela API (preparação de cenário) e devolve o id. */

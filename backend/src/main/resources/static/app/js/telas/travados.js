@@ -6,7 +6,8 @@ import { h, substituir, mensagem, carregando, etiqueta } from '../nucleo/dom.js'
 import { mensagemDeErro, ErroApi } from '../nucleo/api.js';
 import { criarAtualizador } from '../nucleo/atualizador.js';
 import * as rotulos from '../nucleo/rotulos.js';
-import { cronometro, dataHora, limite, avisoOperacional, situacaoRegras, atualizadoEm } from '../nucleo/componentes.js';
+import { cronometro, dataHora, limite, avisoOperacional, situacaoRegras, atualizadoEm, preservandoFoco }
+  from '../nucleo/componentes.js';
 
 const INTERVALO_MS = 30000;
 
@@ -49,8 +50,8 @@ export function montar(raiz, ctx) {
       return;
     }
     const podeCiencia = ctx.pode('EPISODIO_ALTERAR');
-    substituir(lista, h('ul', { class: 'lista-travados' }, t.itens.map((c) => h('li', { class: 'cartao' },
-      h('h2', {}, h('a', { href: `#/episodio/${c.episodioId}` }, c.pacienteNome)),
+    preservandoFoco(lista, () => substituir(lista, h('ul', { class: 'lista-travados' }, t.itens.map((c) => h('li', { class: 'cartao' },
+      h('h2', {}, h('a', { href: `#/episodio/${c.episodioId}`, 'data-foco': `ep-${c.episodioId}` }, c.pacienteNome)),
       h('dl', { class: 'dados' },
         h('dt', {}, 'Setor / etapa'), h('dd', {}, `${c.setorNome} · ${c.etapaNome}`),
         h('dt', {}, 'Tempo total'), h('dd', {}, cronometro(c.entradaEm, agora)),
@@ -69,7 +70,7 @@ export function montar(raiz, ctx) {
         h('div', {}, 'Ação esperada: ', a.acaoEsperada || 'não definida na regra'),
         a.ciencia ? h('div', {}, etiqueta('ciente', `Ciência de ${a.ciencia.autorNome || '—'}`), ' em ',
           dataHora(a.ciencia.registradaEm, fuso))
-          : (podeCiencia ? botaoCiencia(c, a) : etiqueta('neutro', 'Sem ciência')))))))));
+          : (podeCiencia ? botaoCiencia(c, a) : etiqueta('neutro', 'Sem ciência'))))))))));
   }
 
   function botaoCiencia(c, a) {
@@ -100,6 +101,7 @@ export function montar(raiz, ctx) {
       }
     } }, 'Registrar ciência');
     botao.setAttribute('aria-label', `Registrar ciência: ${a.regraNome}, ${c.pacienteNome}`);
+    botao.setAttribute('data-foco', `ciencia-${c.episodioId}-${a.regraId}-${a.referenciaEm}-${a.pendenciaId || ''}`);
     return h('div', { class: 'acoes' }, botao);
   }
 

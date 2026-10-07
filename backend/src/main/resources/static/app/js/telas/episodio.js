@@ -10,7 +10,7 @@ import { criarFormulario, textoOuNulo } from '../nucleo/formulario.js';
 import { localDaUnidadeParaIso, formatarDataHora } from '../nucleo/tempo.js';
 import { descreverEvento } from '../nucleo/eventos.js';
 import * as rotulos from '../nucleo/rotulos.js';
-import { cronometro, dataHora, limite, bloqueio, avisoOperacional, situacaoRegras, atualizadoEm }
+import { cronometro, dataHora, limite, bloqueio, avisoOperacional, situacaoRegras, atualizadoEm, preservandoFoco }
   from '../nucleo/componentes.js';
 
 const INTERVALO_MS = 30000;
@@ -30,6 +30,7 @@ export function montar(raiz, ctx, { id }) {
   const secCaso = h('section', { class: 'cartao', 'aria-labelledby': 'tit-caso' });
   const avisoAlertas = h('div', { 'aria-live': 'polite' });
   const listaAlertas = h('div');
+  const avisoVersao = h('div', { 'aria-live': 'polite' });
   const secOperacoes = h('div');
   const secPendencias = h('section', { class: 'cartao', 'aria-labelledby': 'tit-pend' });
   const secObservacoes = h('section', { class: 'cartao', 'aria-labelledby': 'tit-obs' });
@@ -38,7 +39,7 @@ export function montar(raiz, ctx, { id }) {
     secCaso,
     h('section', { class: 'cartao', 'aria-labelledby': 'tit-alertas' },
       h('h2', { id: 'tit-alertas' }, 'Alertas operacionais'), avisoOperacional(), avisoAlertas, listaAlertas),
-    secOperacoes, secPendencias, secObservacoes, secTempo);
+    avisoVersao, secOperacoes, secPendencias, secObservacoes, secTempo);
 
   substituir(raiz,
     h('p', {}, h('a', { href: '#/torre' }, '← Voltar à Torre de Controle')),
@@ -72,11 +73,16 @@ export function montar(raiz, ctx, { id }) {
     }
   }
 
-  /** Recarrega já (após escrita própria ou a pedido). Não reenvia nada. */
-  async function recarregar() {
-    assinaturaFormularios = null; // força reconstruir os formulários com as versões novas
+  /**
+   * Recarrega já (após escrita própria, ciência ou a pedido). Não reenvia nada. Os formulários só
+   * são reconstruídos se a versão do caso mudou e ninguém tem texto não enviado em outro
+   * formulário — ou se o usuário pediu explicitamente ("Recarregar dados", forcar).
+   */
+  async function recarregar({ forcar = false } = {}) {
+    if (forcar) assinaturaFormularios = null;
     await atualizador.atualizarAgora();
   }
+  const recarregarForcado = () => recarregar({ forcar: true });
 
   function desenhar() {
     if (indicadorCarga) indicadorCarga.remove();
@@ -91,11 +97,19 @@ export function montar(raiz, ctx, { id }) {
     const assinatura = [r.versao, ...caso.pendencias.map((p) => `${p.id}:${p.versao}:${p.status}`),
       caso.encerradoEm || ''].join('|');
     if (assinatura !== assinaturaFormularios) {
-      if (assinaturaFormularios !== null) {
-        ctx.anunciar('O episódio foi atualizado.');
+      if (assinaturaFormularios !== null && formularios.some((f) => f.alterado())) {
+        // Há texto não enviado: não apaga; avisa e deixa o usuário decidir (escrita velha => 409).
+        desenharPendencias({ somenteLeitura: true });
+        substituir(avisoVersao, mensagem('aviso', `O caso foi atualizado (versão ${r.versao}). Os formulários `
+          + 'ainda usam a versão anterior: envie para receber o aviso de conflito, ou atualize-os '
+          + '(o texto não enviado será descartado).'),
+        h('button', { type: 'button', class: 'botao-secundario', aoClicar: recarregarForcado }, 'Atualizar formulários'));
+        return;
       }
+      if (assinaturaFormularios !== null) ctx.anunciar('O episódio foi atualizado.');
       assinaturaFormularios = assinatura;
       formularios = [];
+      substituir(avisoVersao);
       desenharOperacoes();
       desenharPendencias();
     } else {
@@ -149,7 +163,7 @@ export function montar(raiz, ctx, { id }) {
           + `(${regrasAtivas} regra(s) de alerta ativa(s) na unidade).`));
       return;
     }
-    substituir(listaAlertas, h('ul', { class: 'lista-alertas' }, alertas.map((a) => {
+    preservandoFoco(listaAlertas, () => substituir(listaAlertas, h('ul', { class: 'lista-alertas' }, alertas.map((a) => {
       const pend = a.pendenciaId ? caso.pendencias.find((p) => p.id === a.pendenciaId) : null;
       return h('li', { class: 'cartao' },
         h('p', {}, etiqueta('alerta', a.regraNome), ' ',
@@ -162,7 +176,7 @@ export function montar(raiz, ctx, { id }) {
           h('dt', {}, 'Ação esperada'), h('dd', {}, a.acaoEsperada || 'Não definida na regra'),
           h('dt', {}, 'Versão da regra'), h('dd', { class: 'numero' }, String(a.regraVersao))),
         podeCiencia && !a.ciente ? botaoCiencia(a) : null);
-    })));
+    }))));
   }
 
   function botaoCiencia(a) {
@@ -187,6 +201,7 @@ export function montar(raiz, ctx, { id }) {
       }
     } }, 'Registrar ciência');
     botao.setAttribute('aria-label', `Registrar ciência do alerta ${a.regraNome}`);
+    botao.setAttribute('data-foco', `ciencia-${a.regraId}-${a.referenciaEm}-${a.pendenciaId || ''}`);
     return h('div', { class: 'acoes' }, botao);
   }
 
@@ -248,7 +263,9 @@ export function montar(raiz, ctx, { id }) {
     const selEtapa = h('select', { required: true }, opcoes(destinos.map((e) => ({
       valor: e.id, rotulo: e.desfecho ? `Desfecho: ${e.nome}` : e.nome })), { vazio: 'Selecione…' }));
     const selMotivo = h('select', {}, opcoes(opcoesMotivo(), { vazio: 'Sem bloqueio' }));
-    const detalhe = h('input', { type: 'text', maxlength: '500' });
+    // Mantém o bloqueio atual por padrão: mudar de etapa não remove o motivo sem o usuário escolher.
+    if (r.motivoId && motivosAtivos().some((m) => m.id === r.motivoId)) selMotivo.value = r.motivoId;
+    const detalhe = h('input', { type: 'text', maxlength: '500', value: caso.motivoDetalhe || '' });
     const sistema = h('input', { type: 'text', maxlength: '32' });
     const numero = h('input', { type: 'text', maxlength: '60' });
     const justificativa = h('textarea', { maxlength: '1000' });
@@ -279,7 +296,7 @@ export function montar(raiz, ctx, { id }) {
       rotulo: 'Confirmar etapa',
       rotuloAcessivel: 'Mudar etapa',
       campos: [campo('Nova etapa', selEtapa), grupoMotivo, grupoProtocolo, grupoJustificativa, momento.el],
-      recarregar,
+      recarregar: recarregarForcado,
       enviar: async () => {
         const e = etapa(selEtapa.value);
         if (e.desfecho && !window.confirm(`Registrar o desfecho "${e.nome}" encerra o episódio. Confirmar?`)) {
@@ -304,7 +321,7 @@ export function montar(raiz, ctx, { id }) {
     const r = caso.resumo;
     const selMotivo = h('select', {}, opcoes(opcoesMotivo(), { vazio: 'Sem bloqueio (remover motivo atual)' }));
     if (r.motivoId) selMotivo.value = r.motivoId;
-    const detalhe = h('input', { type: 'text', maxlength: '500' });
+    const detalhe = h('input', { type: 'text', maxlength: '500', value: caso.motivoDetalhe || '' });
     const ajustar = () => {
       const m = cat.motivos.find((x) => x.id === selMotivo.value);
       detalhe.required = !!(m && m.exigeDetalhe);
@@ -316,7 +333,7 @@ export function montar(raiz, ctx, { id }) {
       rotulo: 'Salvar motivo',
       rotuloAcessivel: 'Motivo do bloqueio',
       campos: [campo('Motivo', selMotivo), campo('Detalhe', detalhe), momento.el],
-      recarregar,
+      recarregar: recarregarForcado,
       enviar: async () => {
         await ctx.api.substituir(`/api/episodios/${id}/motivo`, {
           versao: r.versao, motivoId: selMotivo.value || null, detalhe: textoOuNulo(detalhe), momento: momento.valor(),
@@ -336,7 +353,7 @@ export function montar(raiz, ctx, { id }) {
       rotulo: 'Salvar protocolo',
       rotuloAcessivel: 'Protocolo',
       campos: [campo('Sistema', sistema, 'Ex.: sistema estadual de regulação'), campo('Número', numero), momento.el],
-      recarregar,
+      recarregar: recarregarForcado,
       enviar: async () => {
         await ctx.api.substituir(`/api/episodios/${id}/protocolo`, {
           versao: r.versao, sistema: sistema.value.trim(), numero: numero.value.trim(), momento: momento.valor(),
@@ -359,7 +376,7 @@ export function montar(raiz, ctx, { id }) {
       rotulo: 'Salvar destino',
       rotuloAcessivel: 'Destino',
       campos: [campo('Especialidade', esp), campo('Descrição do destino', descricao), momento.el],
-      recarregar,
+      recarregar: recarregarForcado,
       enviar: async () => {
         await ctx.api.substituir(`/api/episodios/${id}/destino`, {
           versao: r.versao, especialidadeId: esp.value || null, descricao: textoOuNulo(descricao), momento: momento.valor(),
@@ -383,7 +400,7 @@ export function montar(raiz, ctx, { id }) {
       rotulo: 'Transferir de setor',
       rotuloAcessivel: 'Setor',
       campos: [campo('Novo setor', sel), momento.el],
-      recarregar,
+      recarregar: recarregarForcado,
       enviar: async () => {
         await ctx.api.substituir(`/api/episodios/${id}/setor`, { versao: r.versao, setorId: sel.value, momento: momento.valor() });
         await recarregar();
@@ -415,8 +432,8 @@ export function montar(raiz, ctx, { id }) {
       const vencida = p.status === 'ABERTA' && p.prazo && Date.parse(p.prazo) < agora;
       return h('li', { class: 'cartao', 'data-pendencia': p.id },
         h('p', {}, h('strong', {}, p.descricao), ' ',
-          etiqueta(p.status === 'ABERTA' ? 'neutro' : 'ok', rotulos.statusPendencia(p.status)),
-          vencida ? etiqueta('alerta', 'Prazo vencido') : null),
+          etiqueta(p.status === 'RESOLVIDA' ? 'ok' : 'neutro', rotulos.statusPendencia(p.status)),
+          vencida ? etiqueta('neutro', 'Prazo expirado') : null),
         h('dl', { class: 'dados' },
           h('dt', {}, 'Categoria'), h('dd', {}, rotulos.categoria(p.categoria)),
           h('dt', {}, 'Responsável'), h('dd', {}, rotulos.responsavel(p)),
@@ -516,7 +533,7 @@ export function montar(raiz, ctx, { id }) {
       rotuloAcessivel: 'Alterar responsável ou prazo',
       classeBotao: 'botao-secundario',
       campos: [resp.el, campo(`Novo prazo (horário da unidade: ${fuso})`, prazo, 'Deixe em branco para manter.')],
-      recarregar,
+      recarregar: recarregarForcado,
       enviar: async () => {
         const corpo = { versao: p.versao };
         const r = resp.valor();
@@ -535,7 +552,7 @@ export function montar(raiz, ctx, { id }) {
         rotuloAcessivel: rotulo,
         classeBotao: acao === 'cancelamento' ? 'botao-perigo' : undefined,
         campos: [campo(rotuloTexto, texto)],
-        recarregar,
+        recarregar: recarregarForcado,
         enviar: async () => {
           await ctx.api.criar(`/api/pendencias/${p.id}/${acao}`, { versao: p.versao, texto: texto.value.trim() });
           await recarregar();

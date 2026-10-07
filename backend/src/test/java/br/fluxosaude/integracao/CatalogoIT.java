@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import br.fluxosaude.identidade.infra.HashDeSenhaArgon2;
+import java.net.http.HttpResponse;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -125,6 +126,25 @@ class CatalogoIT extends IntegracaoBase {
         JsonNode caso = json.readTree(exigir(200, coord.enviar("GET", "/api/episodios/" + texto(aberto.get("id")), null))
                 .body());
         assertTrue(caso.get("alertas").isArray() && caso.get("alertas").size() == 0, "sem regras, sem alertas");
+
+        // ------------------------------------------------------------ unidade esperada (outra aba trocou a unidade)
+        // A sessão está na A. Uma aba que ainda mostra a B é recusada (409), sem ler nem gravar na A.
+        coord.cabecalhos.put("X-Fluxo-Unidade", unidadeB.toString());
+        HttpResponse<String> recusa = coord.enviar("GET", "/api/episodios", null);
+        assertEquals(409, recusa.statusCode());
+        assertTrue(recusa.body().contains("UNIDADE_ATIVA_ALTERADA"));
+        assertEquals(409, coord.enviar("POST", "/api/episodios/" + texto(aberto.get("id")) + "/observacoes",
+                "{\"texto\":\"nao deve gravar\"}").statusCode());
+        exigir(200, coord.enviar("GET", "/api/sessao", null));            // rotas de sessão não conferem
+        exigir(200, coord.enviar("GET", "/api/sessao/unidades", null));
+        coord.cabecalhos.put("X-Fluxo-Unidade", unidadeA.toString());      // a unidade certa passa
+        exigir(200, coord.enviar("GET", "/api/episodios", null));
+        coord.cabecalhos.put("X-Fluxo-Unidade", "nao-e-uuid");
+        assertEquals(409, coord.enviar("GET", "/api/catalogo", null).statusCode());
+        coord.cabecalhos.clear();                                          // cabeçalho é opcional
+        exigir(200, coord.enviar("GET", "/api/catalogo", null));
+        assertEquals(0, json.readTree(exigir(200, coord.enviar("GET", "/api/episodios/" + texto(aberto.get("id")), null))
+                .body()).get("observacoes").size(), "a escrita recusada não gravou nada");
 
         // ------------------------------------------------------------ auditoria da busca nominal
         try (Connection c = conexaoDono();

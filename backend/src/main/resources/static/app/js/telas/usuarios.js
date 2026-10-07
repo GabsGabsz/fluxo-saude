@@ -13,7 +13,8 @@ export function montar(raiz, ctx) {
   const fixos = [];          // novo usuário e vínculo
   const eu = ctx.estado.sessao().usuarioId;
 
-  const avisoSenha = h('div', { 'aria-live': 'assertive' });
+  // Sem região "live": a senha não é lida em voz alta automaticamente; o foco vai para o título.
+  const avisoSenha = h('div');
   const situacaoLista = h('div');
   const lista = h('div', {}, carregando());
   const editor = h('div');
@@ -29,12 +30,13 @@ export function montar(raiz, ctx) {
 
   function mostrarSenha(login, senha) {
     const valor = h('span', { class: 'senha-provisoria' }, senha);
-    substituir(avisoSenha, h('div', { class: 'mensagem mensagem-aviso', role: 'alert' },
-      h('p', {}, h('strong', {}, `Senha provisória de ${login}: `), valor),
+    const titulo = h('h2', { tabindex: '-1' }, `Senha provisória gerada para ${login}`);
+    substituir(avisoSenha, h('section', { class: 'mensagem mensagem-aviso', 'aria-label': 'Senha provisória' },
+      titulo, h('p', {}, 'Senha: ', valor),
       h('p', {}, 'Ela não será exibida novamente. Entregue-a pessoalmente ou por canal seguro; '
         + 'no primeiro acesso a troca será obrigatória.'),
       h('button', { type: 'button', aoClicar: () => substituir(avisoSenha) }, 'Ocultar senha')));
-    avisoSenha.querySelector('button').focus();
+    titulo.focus();
   }
 
   // ------------------------------------------------------------ lista

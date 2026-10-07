@@ -113,6 +113,10 @@ export function montar(raiz, ctx) {
     enviar: async () => {
       const corpo = { setorId: setor.value };
       if (usarNovo.checked) {
+        if (!nNome.value.trim()) {
+          nNome.focus();
+          throw new ErroApi(0, { detail: 'Informe o nome completo do novo paciente.' });
+        }
         corpo.novoPaciente = { nome: nNome.value.trim(), dataNascimento: nNascimento.value || null,
           cns: textoOuNulo(nCns), identificadorInstitucional: textoOuNulo(nIdent) };
       } else if (pacienteEscolhido) {

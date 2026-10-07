@@ -27,8 +27,8 @@ export function montar(raiz, ctx, { obrigatoria = false } = {}) {
       await ctx.api.executar('PUT', '/api/sessao/senha', { senhaAtual: atual.value, novaSenha: nova.value });
       limpar();
       ctx.anunciar('Senha alterada.');
+      ctx.notificar('Senha alterada. As outras sessões abertas com o seu usuário foram encerradas.');
       await ctx.recarregarSessao();
-      return 'Senha alterada. As outras sessões abertas com o seu usuário foram encerradas.';
     },
     traduzirErro: () => {
       atual.value = '';

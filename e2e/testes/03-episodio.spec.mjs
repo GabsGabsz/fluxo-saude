@@ -23,8 +23,9 @@ test('enfermagem abre episódio por CNS e atualiza etapa, pendência e observaç
   await etapa.getByLabel('Motivo do bloqueio').selectOption({ label: 'Aguardando exame (Assistencial)' });
   await etapa.getByRole('button', { name: 'Confirmar etapa' }).click();
   const dados = page.getByRole('region', { name: 'Dados do caso' });
-  await expect(dados).toContainText('Aguardando exame/parecer');
-  await expect(dados).toContainText('Aguardando exame');
+  await expect(dados.locator('dt:text-is("Etapa") + dd')).toContainText('Aguardando exame/parecer');
+  await expect(dados.locator('dt:text-is("Bloqueio") + dd')).toContainText('Aguardando exame');
+  await expect(dados.locator('dt:text-is("Bloqueio") + dd')).toContainText('Assistencial');
   const tempo = page.getByRole('region', { name: 'Linha do tempo' });
   await expect(tempo).toContainText('Em atendimento → Aguardando exame/parecer');
   await expect(tempo).toContainText('Bloqueio definido');

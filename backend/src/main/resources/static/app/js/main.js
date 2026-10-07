@@ -39,6 +39,8 @@ const relogio = criarRelogio();
 let telaAtual = null;          // { desmontar(), emEdicao() }
 let avisoLogin = null;         // mensagem a exibir na tela de login (sessão encerrada, saída...)
 let ultimaAtualizacaoOk = null;
+let avisoPosRender = null;     // aviso exibido no topo da próxima tela montada
+let trocandoUnidade = false;
 
 function lerCookie(nome) {
   for (const parte of document.cookie.split(';')) {
@@ -53,7 +55,38 @@ const api = criarApi({
   lerCookie,
   geracao: () => estado.geracao(),
   aoEncerrarSessao: () => encerrarLocalmente('Sua sessão foi encerrada (expirou, foi revogada ou a senha foi alterada). Entre novamente.'),
+  // A unidade ativa fica na sessão (compartilhada entre abas): o servidor confere a unidade que ESTA
+  // tela exibe e recusa (409) se outra aba a trocou — nada é lido nem gravado na unidade errada.
+  unidadeEsperada: () => (estado.sessao() ? estado.sessao().unidadeAtiva : null),
+  aoMudarUnidade: () => contextoMudou('A unidade ativa foi trocada em outra aba ou janela. A tela foi recarregada '
+    + 'com a unidade atual; nada foi gravado na unidade anterior.'),
 });
+
+// Outras abas do mesmo navegador: avisa (sem dado algum) que sessão/unidade mudou.
+let canal = null;
+try { canal = new BroadcastChannel('fluxo-saude-contexto'); } catch { canal = null; }
+function avisarOutrasAbas() {
+  try { if (canal) canal.postMessage({ tipo: 'contexto' }); } catch { /* sem suporte */ }
+}
+if (canal) {
+  canal.onmessage = (ev) => {
+    if (!ev.data || ev.data.tipo !== 'contexto') return;
+    if (estado.sessao()) contextoMudou('A sessão ou a unidade ativa foi alterada em outra aba. A tela foi recarregada.');
+    else recarregarSessao();
+  };
+}
+
+/** Sessão/unidade mudou fora desta aba: descarta tudo o que está na tela e relê a sessão. */
+function contextoMudou(texto) {
+  if (!estado.sessao()) return;
+  desmontar();
+  estado.invalidar();
+  faixa.hidden = true;
+  avisoPosRender = texto;
+  history.replaceState(null, '', '#/');
+  substituir(principal, carregando('Recarregando…'));
+  recarregarSessao();
+}
 
 // ------------------------------------------------------------------ contexto entregue às telas
 const ctx = {
@@ -72,7 +105,8 @@ const ctx = {
     setTimeout(() => { anuncio.textContent = texto; }, 50);
   },
   /** Atualização periódica da tela: falha de conexão => faixa de "dados possivelmente desatualizados". */
-  situacaoAtualizacao({ falhou }) {
+  situacaoAtualizacao({ falhou, pausado }) {
+    if (pausado) return; // nada foi lido: não muda o horário da última atualização
     if (!falhou) {
       ultimaAtualizacaoOk = relogio.agora();
       faixa.hidden = true;
@@ -87,6 +121,9 @@ const ctx = {
   },
   irPara,
   recarregarSessao,
+  avisarOutrasAbas,
+  /** Aviso a exibir no topo da próxima tela (ex.: depois de recarregar a sessão). */
+  notificar(texto) { avisoPosRender = texto; },
   /** 403 TROCA_DE_SENHA_OBRIGATORIA no meio do uso: volta para a troca de senha. */
   tratarErroGlobal(e) {
     if (e instanceof ErroApi && e.trocaDeSenha) {
@@ -124,6 +161,7 @@ function encerrarLocalmente(texto) {
   estado.limpar();
   avisoLogin = texto;
   faixa.hidden = true;
+  history.replaceState(null, '', '#/'); // o próximo login não herda a rota (ex.: um caso) do anterior
   renderizar();
 }
 
@@ -142,6 +180,7 @@ async function sair() {
     }
   }
   estado.limpar();
+  avisarOutrasAbas();
   avisoLogin = texto;
   faixa.hidden = true;
   history.replaceState(null, '', '#/');
@@ -165,22 +204,33 @@ async function trocarUnidade(unidadeId) {
     desenharTopo();
     return;
   }
+  if (trocandoUnidade) return;
+  trocandoUnidade = true;
+  const seletor = document.getElementById('unidade-ativa');
+  if (seletor) seletor.disabled = true; // uma troca por vez (sem corrida entre dois PUT)
   // Tira da tela TUDO da unidade anterior antes de pedir a troca e invalida o que estiver em voo.
   desmontar();
   estado.invalidar();
   faixa.hidden = true;
+  const hashInicial = location.hash;
   substituir(principal, carregando('Trocando de unidade…'));
   try {
     const nova = await api.substituir('/api/sessao/unidade', { unidadeId });
     estado.definirSessao(nova);
-    history.replaceState(null, '', '#/');
+    avisarOutrasAbas();
+    // Volta à tela inicial, salvo se o usuário já navegou para outro endereço durante a troca.
+    if (location.hash === hashInicial) history.replaceState(null, '', '#/');
+    trocandoUnidade = false;
     await renderizar();
     ctx.anunciar('Unidade ativa alterada.');
   } catch (e) {
+    trocandoUnidade = false;
     if (e && e.name === 'RespostaDescartada') return;
     if (e instanceof ErroApi && e.status === 401) return;
-    substituir(principal, mensagem('erro', `Não foi possível trocar de unidade: ${mensagemDeErro(e)}`));
+    avisoPosRender = `Não foi possível trocar de unidade: ${mensagemDeErro(e)}`;
     await recarregarSessao();
+  } finally {
+    trocandoUnidade = false;
   }
 }
 
@@ -242,6 +292,7 @@ let renderizando = 0;
 async function renderizar() {
   const minha = ++renderizando;
   desmontar();
+  faixa.hidden = true; // a faixa de "desatualizado" é da tela anterior
   const sessao = estado.sessao();
 
   if (!sessao) {
@@ -251,6 +302,7 @@ async function renderizar() {
     avisoLogin = null;
     telaAtual = telaLogin.montar(principal, ctx, { aviso, aoEntrar: async (s) => {
       estado.definirSessao(s);
+      avisarOutrasAbas();
       await renderizar();
     } });
     return;
@@ -304,6 +356,10 @@ async function renderizar() {
   }
   telaAtual = tela.modulo.montar(principal, ctx, { id });
   hashExibido = location.hash;
+  if (avisoPosRender) {
+    principal.prepend(mensagem('aviso', avisoPosRender));
+    avisoPosRender = null;
+  }
   focarTitulo();
 }
 

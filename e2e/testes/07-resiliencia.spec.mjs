@@ -1,7 +1,7 @@
 // Resiliência da tela: resposta atrasada da unidade anterior é descartada; falha de conexão
 // sinaliza dados possivelmente desatualizados sem apagar a lista nem disparar escrita.
 import { test, expect } from '@playwright/test';
-import { entrar, escolherUnidade, clienteApi, abrirEpisodio, FIX, NORTE, SUL } from './apoio.mjs';
+import { entrar, escolherUnidade, clienteApi, garantirEpisodio, FIX, NORTE, SUL } from './apoio.mjs';
 
 const alfa = FIX.pacientes.find((p) => p.nome.endsWith('Alfa'));
 const beta = FIX.pacientes.find((p) => p.nome.endsWith('Beta'));
@@ -11,8 +11,7 @@ test.beforeAll(async ({ baseURL }) => {
   const coord = await clienteApi(baseURL, 'coord.e2e');
   for (const [u, p] of [[NORTE, alfa], [SUL, beta]]) {
     await coord.usarUnidade(u.codigo);
-    const torre = await coord.get('/api/episodios');
-    if (!torre.itens.some((l) => l.pacienteNome === p.nome)) await abrirEpisodio(coord, { cns: p.cns, setorNome: u.setores[0][1] });
+    await garantirEpisodio(coord, { cns: p.cns, nome: p.nome, setorNome: u.setores[0][1] });
   }
   await coord.fechar();
 });
@@ -38,6 +37,30 @@ test('resposta atrasada da unidade anterior não aparece depois da troca', async
     await expect(page.getByText(alfa.nome)).toHaveCount(0);
     await page.waitForTimeout(500);
   }
+});
+
+test('outra aba troca a unidade: esta aba não lê nem grava na unidade que não exibe', async ({ browser, baseURL }) => {
+  const contexto = await browser.newContext({ baseURL });   // mesma sessão (cookies) nas duas abas
+  const abaA = await contexto.newPage();
+  // Sem BroadcastChannel na aba A: prova a defesa do SERVIDOR (cabeçalho X-Fluxo-Unidade -> 409).
+  await abaA.addInitScript(() => { delete window.BroadcastChannel; });
+  await entrar(abaA, 'coord.e2e');
+  await escolherUnidade(abaA, NORTE.nome);
+  await expect(abaA.getByRole('link', { name: alfa.nome })).toBeVisible();
+
+  const abaB = await contexto.newPage();
+  await abaB.goto('/');
+  await escolherUnidade(abaB, SUL.nome);
+
+  const respostas = [];
+  abaA.on('response', (r) => { if (r.url().includes('/api/episodios')) respostas.push(r.status()); });
+  await abaA.getByRole('button', { name: 'Atualizar agora' }).click();
+  await expect(abaA.getByText('A unidade ativa foi trocada em outra aba ou janela')).toBeVisible();
+  expect(respostas[0]).toBe(409);                            // recusada antes de ler a outra unidade
+  await expect(abaA.getByLabel('Unidade ativa:').locator('option:checked')).toHaveText(SUL.nome);
+  await expect(abaA.getByRole('link', { name: beta.nome })).toBeVisible();
+  await expect(abaA.getByText(alfa.nome)).toHaveCount(0);
+  await contexto.close();
 });
 
 test('falha de conexão: aviso de dados desatualizados, lista mantida, nenhuma escrita', async ({ page }) => {

@@ -23,7 +23,8 @@ export const natureza = mapa({
   ATENDIMENTO: 'Atendimento', ESPERA: 'Espera', ACEITO: 'Aceito', TRANSPORTE: 'Transporte', DESFECHO: 'Desfecho',
 });
 
-export const statusPendencia = mapa({ ABERTA: 'Aberta', RESOLVIDA: 'Resolvida', CANCELADA: 'Cancelada' });
+export const statusPendencia = mapa({ ABERTA: 'Aberta', RESOLVIDA: 'Resolvida', CANCELADA: 'Cancelada',
+  ENCERRADA_POR_DESFECHO: 'Encerrada pelo desfecho' });
 
 export const desfecho = mapa({
   ALTA: 'Alta', TRANSFERENCIA: 'Transferência', INTERNACAO: 'Internação', OBITO: 'Óbito', EVASAO: 'Evasão',

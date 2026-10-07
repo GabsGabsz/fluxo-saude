@@ -36,14 +36,14 @@ python3 "$RAIZ/e2e/dados/gerar-seed.py" \
   | PGPASSWORD="$FLUXO_OWNER_PASSWORD" psql -X -q -v ON_ERROR_STOP=1 -U fluxo_owner -d "$FLUXO_DB" >/dev/null
 
 echo "== 4/4 aplicação (somente a credencial restrita fluxo_app) na porta $PORTA"
-mkdir -p "$RAIZ/e2e/resultados"
+mkdir -p "$RAIZ/e2e/aplicacao"   # fora de "resultados" (o Playwright limpa essa pasta)
 ( unset FLUXO_OWNER_PASSWORD
   FLUXO_DB_URL="$URL" FLUXO_DB_APP_PASSWORD="$FLUXO_APP_PASSWORD" nohup java -jar "$JAR" \
     --server.port="$PORTA" \
     --server.servlet.session.cookie.secure=false \
     --server.servlet.session.cookie.name=FLUXO \
-    > "$RAIZ/e2e/resultados/aplicacao.log" 2>&1 &
-  echo $! > "$RAIZ/e2e/resultados/aplicacao.pid" )
+    > "$RAIZ/e2e/aplicacao/aplicacao.log" 2>&1 &
+  echo $! > "$RAIZ/e2e/aplicacao/aplicacao.pid" )
 
 for _ in $(seq 1 90); do
   if curl -fsS "http://localhost:${PORTA}/actuator/health" >/dev/null 2>&1; then
@@ -53,5 +53,5 @@ for _ in $(seq 1 90); do
   sleep 2
 done
 echo "a aplicação não respondeu ao health check; últimas linhas do log:"
-tail -50 "$RAIZ/e2e/resultados/aplicacao.log"
+tail -50 "$RAIZ/e2e/aplicacao/aplicacao.log"
 exit 1

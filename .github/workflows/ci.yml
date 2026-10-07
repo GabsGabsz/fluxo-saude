@@ -144,7 +144,7 @@ jobs:
         run: npx playwright test
       - name: Encerrar aplicação
         if: always()
-        run: kill "$(cat e2e/resultados/aplicacao.pid)" 2>/dev/null || true
+        run: kill "$(cat e2e/aplicacao/aplicacao.pid)" 2>/dev/null || true
       - name: Guardar relatório, capturas de tela e log da aplicação
         if: always()
         uses: actions/upload-artifact@v4
@@ -154,5 +154,6 @@ jobs:
             e2e/relatorio/
             e2e/capturas/
             e2e/resultados/
+            e2e/aplicacao/
           if-no-files-found: warn
           retention-days: 14

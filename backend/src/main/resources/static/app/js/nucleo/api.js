@@ -15,6 +15,8 @@ export class ErroApi extends Error {
   get conflito() { return this.status === 409; }
   get sessaoEncerrada() { return this.status === 401; }
   get trocaDeSenha() { return this.status === 403 && this.codigo === 'TROCA_DE_SENHA_OBRIGATORIA'; }
+  /** A unidade ativa da sessão (compartilhada entre abas) não é a que esta tela mostra. */
+  get unidadeAlterada() { return this.status === 409 && this.codigo === 'UNIDADE_ATIVA_ALTERADA'; }
 }
 
 /** Falha de rede (servidor fora do ar, sem conexão): os dados na tela podem estar desatualizados. */
@@ -30,9 +32,12 @@ export class RespostaDescartada extends Error {
 const METODOS_SEGUROS = new Set(['GET', 'HEAD']);
 
 /**
- * @param {object} deps fetch, lerCookie(nome), geracao() -> número atual, aoEncerrarSessao(erro)
+ * @param {object} deps fetch, lerCookie(nome), geracao() -> número atual, aoEncerrarSessao(erro),
+ *   unidadeEsperada() -> id da unidade exibida (enviada em X-Fluxo-Unidade; o servidor recusa com
+ *   409 UNIDADE_ATIVA_ALTERADA se outra aba trocou a unidade), aoMudarUnidade(erro)
  */
-export function criarApi({ fetch, lerCookie, geracao, aoEncerrarSessao = () => {} }) {
+export function criarApi({ fetch, lerCookie, geracao, aoEncerrarSessao = () => {}, unidadeEsperada = () => null,
+  aoMudarUnidade = () => {} }) {
   async function garantirCsrf() {
     if (!lerCookie('XSRF-TOKEN')) {
       await executar('GET', '/api/sessao/csrf', undefined, { semGeracao: true });
@@ -48,6 +53,8 @@ export function criarApi({ fetch, lerCookie, geracao, aoEncerrarSessao = () => {
       await garantirCsrf();
     }
     const cabecalhos = { Accept: 'application/json' };
+    const unidade = unidadeEsperada();
+    if (unidade) cabecalhos['X-Fluxo-Unidade'] = unidade;
     if (corpo !== undefined) cabecalhos['Content-Type'] = 'application/json';
     const token = lerCookie('XSRF-TOKEN');
     if (!METODOS_SEGUROS.has(metodo) && token) cabecalhos['X-XSRF-TOKEN'] = token;
@@ -77,6 +84,7 @@ export function criarApi({ fetch, lerCookie, geracao, aoEncerrarSessao = () => {
     if (!resposta.ok) {
       const erro = new ErroApi(resposta.status, dados);
       if (erro.sessaoEncerrada && !opcoes.login) aoEncerrarSessao(erro);
+      if (erro.unidadeAlterada) aoMudarUnidade(erro);
       throw erro;
     }
     return { status: resposta.status, dados };
@@ -109,8 +117,10 @@ export function consulta(parametros) {
 export function mensagemDeErro(e) {
   if (e instanceof ErroConexao) return 'Sem conexão com o servidor. Os dados exibidos podem estar desatualizados.';
   if (e instanceof ErroApi) {
+    if (e.unidadeAlterada) return 'A unidade ativa foi trocada (por exemplo, em outra aba). Nada foi gravado; a tela será recarregada.';
     if (e.status === 409) return 'Este registro foi alterado por outra pessoa. Atualize a tela e refaça a ação, se ainda for necessária.';
-    if (e.status === 403) return e.trocaDeSenha ? 'É necessário trocar a senha antes de continuar.' : 'Você não tem permissão para esta ação.';
+    if (e.trocaDeSenha) return 'É necessário trocar a senha antes de continuar.';
+    if (e.status === 403) return 'Ação recusada: sem permissão para ela, ou a proteção da sessão expirou. Se você tem permissão, tente de novo; persistindo, saia e entre novamente.';
     if (e.status === 404) return 'Registro não encontrado (ou fora da unidade ativa).';
     if (e.status === 429) return 'Muitas tentativas. Aguarde alguns minutos.';
     if (e.status === 503) return 'Servidor ocupado. Tente novamente em instantes.';

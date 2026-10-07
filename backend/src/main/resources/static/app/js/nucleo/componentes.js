@@ -49,21 +49,36 @@ export function avisoOperacional() {
     'Não indicam risco clínico nem substituem a classificação de risco.');
 }
 
+/**
+ * Atualização periódica sem perder o foco do teclado: elementos com data-foco são reencontrados
+ * pela mesma chave depois que o conteúdo é redesenhado.
+ */
+export function preservandoFoco(container, redesenhar) {
+  const ativo = document.activeElement;
+  const chave = ativo && container.contains(ativo) ? ativo.getAttribute('data-foco') : null;
+  redesenhar();
+  if (chave) {
+    const el = container.querySelector(`[data-foco="${CSS.escape(chave)}"]`);
+    if (el) el.focus();
+  }
+}
+
 /** Situação das regras: distingue "nenhuma regra configurada" de "nenhum alerta". */
 export function situacaoRegras(regrasAtivas, totalAlertas) {
   if (regrasAtivas === null) return null;
   if (regrasAtivas === 0) {
-    return h('p', { class: 'mensagem mensagem-info', role: 'status' }, h('span', { 'aria-hidden': 'true' }, 'ℹ '),
+    return h('p', { class: 'mensagem mensagem-info' }, h('span', { 'aria-hidden': 'true' }, 'ℹ '),
       'Nenhuma regra de alerta ativa nesta unidade: alertas não são calculados. ',
       'A ausência de alertas NÃO significa que não há atraso.');
   }
-  return h('p', { class: 'discreto', role: 'status' },
+  return h('p', { class: 'discreto' },
     `${regrasAtivas} ${regrasAtivas === 1 ? 'regra de alerta ativa' : 'regras de alerta ativas'}. `,
     totalAlertas === 0 ? 'Nenhum caso atingiu os limites configurados.' : '');
 }
 
+/** Sem região "status": não é reanunciado a cada atualização periódica. */
 export function atualizadoEm(agoraIso, fuso, pausado) {
-  return h('p', { class: 'discreto', role: 'status' },
+  return h('p', { class: 'discreto' },
     agoraIso ? `Atualizado em ${formatarDataHora(agoraIso, fuso)} (horário do servidor, fuso da unidade). ` : '',
     pausado ? 'Atualização automática pausada enquanto você edita.' : '');
 }

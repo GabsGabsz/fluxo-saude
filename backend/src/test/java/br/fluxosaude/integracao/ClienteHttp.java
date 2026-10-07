@@ -17,6 +17,8 @@ final class ClienteHttp {
     private final HttpClient http = HttpClient.newHttpClient();
     private final int porta;
     final Map<String, String> cookies = new HashMap<>();
+    /** Cabeçalhos extras enviados em toda requisição (ex.: X-Fluxo-Unidade). */
+    final Map<String, String> cabecalhos = new HashMap<>();
 
     ClienteHttp(int porta) {
         this.porta = porta;
@@ -32,6 +34,7 @@ final class ClienteHttp {
         if (csrf != null) {
             b.header("X-XSRF-TOKEN", csrf);
         }
+        cabecalhos.forEach(b::header);
         b.header("Content-Type", "application/json");
         b.method(metodo, json == null ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofString(json));
         HttpResponse<String> r = http.send(b.build(), HttpResponse.BodyHandlers.ofString());

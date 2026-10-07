@@ -33,7 +33,8 @@ test('409 informa, não sobrescreve e não reenvia', async ({ page, baseURL }) =
   await protocolo.getByRole('button', { name: 'Recarregar dados' }).click();
   const dados = page.getByRole('region', { name: 'Dados do caso' });
   await expect(dados).toContainText('Emergência Norte');
-  await expect(dados).toContainText(String(depois.resumo.versao));
+  await expect(dados.locator('dt:text-is("Versão do registro") + dd')).toHaveText(String(depois.resumo.versao));
+  await expect(protocolo.getByLabel('Número')).toHaveValue('');           // formulário refeito na versão nova
   const final = await coord.get(`/api/episodios/${id}`);
   expect(final.resumo.protocoloNumero).toBeNull();            // nenhum reenvio automático
   await coord.fechar();

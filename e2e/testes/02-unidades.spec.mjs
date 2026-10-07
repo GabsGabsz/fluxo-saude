@@ -1,6 +1,6 @@
 // Troca de unidade ativa: a tela passa a mostrar só os dados da nova unidade (sem mistura).
 import { test, expect } from '@playwright/test';
-import { entrar, escolherUnidade, capturar, clienteApi, abrirEpisodio, FIX, NORTE, SUL } from './apoio.mjs';
+import { entrar, escolherUnidade, capturar, clienteApi, garantirEpisodio, FIX, NORTE, SUL } from './apoio.mjs';
 
 const alfa = FIX.pacientes.find((p) => p.nome.endsWith('Alfa'));
 const beta = FIX.pacientes.find((p) => p.nome.endsWith('Beta'));
@@ -8,9 +8,9 @@ const beta = FIX.pacientes.find((p) => p.nome.endsWith('Beta'));
 test.beforeAll(async ({ baseURL }) => {
   const coord = await clienteApi(baseURL, 'coord.e2e');
   await coord.usarUnidade(NORTE.codigo);
-  await abrirEpisodio(coord, { cns: alfa.cns, setorNome: NORTE.setores[0][1] });
+  await garantirEpisodio(coord, { cns: alfa.cns, nome: alfa.nome, setorNome: NORTE.setores[0][1] });
   await coord.usarUnidade(SUL.codigo);
-  await abrirEpisodio(coord, { cns: beta.cns, setorNome: SUL.setores[0][1] });
+  await garantirEpisodio(coord, { cns: beta.cns, nome: beta.nome, setorNome: SUL.setores[0][1] });
   await coord.fechar();
 });
 
@@ -36,6 +36,7 @@ test('coordenação alterna Norte ↔ Sul sem misturar pacientes, setores ou fus
   const linkAlfa = await page.getByRole('link', { name: alfa.nome }).getAttribute('href');
   await escolherUnidade(page, SUL.nome);
   await page.goto(`/${linkAlfa}`);
+  await expect(page.getByRole('heading', { name: 'Episódio' })).toBeVisible();
   await expect(page.getByText('Episódio não encontrado na unidade ativa.')).toBeVisible();
   await expect(page.getByText(alfa.nome)).toHaveCount(0);
 });

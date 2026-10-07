@@ -7,6 +7,7 @@ test('sem regras na unidade: a tela diz que alertas não são calculados', async
   await entrar(page, 'coord.e2e');
   await escolherUnidade(page, NORTE.nome);
   await page.getByRole('link', { name: 'Pacientes travados' }).click();
+  await expect(page.getByRole('heading', { name: 'Pacientes travados' })).toBeVisible();
   await expect(page.getByText('Nenhuma regra de alerta ativa nesta unidade')).toBeVisible();
   await expect(page.getByText('A ausência de alertas NÃO significa que não há atraso.')).toBeVisible();
 });
