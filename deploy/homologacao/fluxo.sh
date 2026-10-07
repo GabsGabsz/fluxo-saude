@@ -19,6 +19,9 @@
 #                     compatível); migração só valida; confere auditoria, contagens e estado final
 #   atualizar [--imagem REF]   backup + manutenção + migração separada; distingue falha sem avanço
 #                     (volta a imagem anterior) de avanço parcial (aplicação fica parada)
+#   atualizar --imagem REF --continuar-parcial   correção PARA A FRENTE de um avanço parcial: confere
+#                     as migrações já aplicadas (arquivo + SHA-256) contra a imagem corretiva, faz
+#                     backup do estado parcial, aplica só as pendentes e só então volta a atender
 #   remover --confirmo-apagar-dados   apaga contêineres, VOLUMES, configuração e segredos do projeto
 #
 # Ver docs/operacao/homologacao.md. Nenhuma senha é escrita em log, argumento ou artefato.
@@ -39,6 +42,10 @@ COMANDO="${1:-ajuda}"; shift || true
 
 AMBIENTES="$AQUI/ambientes"
 ENVF="$AMBIENTES/$PROJETO.env"
+# Marca de atualização com AVANÇO PARCIAL pendente (e inventário das migrações já aplicadas: arquivo +
+# SHA-256, vindo das imagens que as aplicaram). Enquanto existir, nada volta a atender sozinho.
+MARCA="$AMBIENTES/$PROJETO.parcial"
+INVENT="$AMBIENTES/$PROJETO.parcial.inventario"
 
 carregar() {
     [ -f "$ENVF" ] || erro "projeto '$PROJETO' não preparado: rode '$0 -p $PROJETO preparar'"
@@ -60,6 +67,24 @@ definir() {   # definir CHAVE VALOR  -> grava/atualiza no arquivo de ambiente do
 }
 
 imagem_id() { docker image inspect -f '{{.Id}}' "$1" 2>/dev/null; }
+
+# Inventário completo da imagem: "<sha256>  V<n>__<nome>.sql" por migração embutida.
+inventario_imagem() { docker run --rm --network none --entrypoint cat "$1" /app/migracoes.txt; }
+
+# filtrar_versoes "1,2,3" < inventário  -> só as linhas dessas versões
+filtrar_versoes() {
+    awk -v lista="$1" 'BEGIN { n = split(lista, v, ","); for (i = 1; i <= n; i++) quer[v[i]] = 1 }
+        { if (match($2, /^V[0-9]+__/)) { ver = substr($2, 2, RLENGTH - 3); if (ver in quer) print } }'
+}
+
+exigir_sem_parcial() {
+    [ ! -f "$MARCA" ] || erro "há uma atualização com AVANÇO PARCIAL pendente em '$PROJETO' ($(sed -n 's/^migracoes_depois=//p' "$MARCA")).
+  Nenhuma imagem volta a atender sozinha. Use a correção para a frente:
+    bash $0 -p $PROJETO atualizar --imagem <imagem-corrigida> --continuar-parcial
+  ou a restauração isolada do backup anterior à atualização:
+    bash $0 -p $PROJETO restaurar $(sed -n 's/^backup_previo=//p' "$MARCA")
+  (docs/operacao/homologacao.md §7)"
+}
 imagem_commit() { docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$1" 2>/dev/null; }
 
 exigir_imagem() {   # exigir_imagem REF [contexto]
@@ -200,6 +225,7 @@ cmd_construir() {
 
 cmd_subir() {
     carregar
+    exigir_sem_parcial
     [ -n "${FLUXO_IMAGEM:-}" ] || erro "nenhuma imagem definida para '$PROJETO': rode 'fluxo.sh -p $PROJETO construir'"
     exigir_imagem "$FLUXO_IMAGEM"
     info "banco ($PROJETO)"
@@ -239,6 +265,7 @@ cmd_parar() { carregar; dc stop; }
 
 cmd_reiniciar() {
     carregar
+    exigir_sem_parcial
     dc restart db
     dc up -d --wait --wait-timeout 180 db
     dc restart app proxy
@@ -343,10 +370,11 @@ cmd_demo() {
 
 cmd_backup() {
     carregar
-    local destino="$AQUI/backups"
+    local destino="$AQUI/backups" rotulo=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --destino) destino="$2"; shift 2 ;;
+            --rotulo) rotulo="$2"; shift 2; [[ "$rotulo" =~ ^[a-z0-9-]+$ ]] || erro "rótulo inválido" ;;
             *) erro "opção desconhecida: $1" ;;
         esac
     done
@@ -354,7 +382,7 @@ cmd_backup() {
     mkdir -p "$destino"; chmod 700 "$destino"
     local ts base
     ts="$(date -u +%Y%m%dT%H%M%SZ)"
-    base="$destino/fluxo-$PROJETO-$ts"
+    base="$destino/fluxo-$PROJETO-$ts${rotulo:+-$rotulo}"
     # Identidade IMUTÁVEL da imagem que atende este banco (ID do conteúdo, não só a tag), o commit
     # e as migrações que ela embute: a restauração exige uma imagem compatível com o backup.
     local img_id img_origem="em_execucao"
@@ -382,6 +410,7 @@ cmd_backup() {
         echo "imagem_ref=${FLUXO_IMAGEM:-}"
         echo "imagem_commit=$(imagem_commit "$img_id")"
         echo "imagem_migracoes=$(versoes_imagem "$img_id")"
+        echo "estado=$([ -f "$MARCA" ] && echo PARCIAL || echo NORMAL)"
         printf '%s\n' "$SQL_MANIFESTO" "SELECT 'FIM_MANIFESTO';" >&"${PG[1]}"
         local linha
         while read -r -t 300 linha <&"${PG[0]}"; do
@@ -458,7 +487,10 @@ cmd_restaurar() {
     "$AQUI/fluxo.sh" -p "$destino" preparar --porta "$porta" --rede "$rede"
     local origem="$PROJETO" tag_rec="fluxo-saude:recuperacao-$destino"
     docker image tag "$id_img" "$tag_rec"
-    PROJETO="$destino"; ENVF="$AMBIENTES/$destino.env"; carregar
+    # Daqui em diante tudo se refere ao projeto de DESTINO (inclusive a marca de estado parcial: a do
+    # original continua lá, e o original continua parado).
+    PROJETO="$destino"; ENVF="$AMBIENTES/$destino.env"
+    MARCA="$AMBIENTES/$destino.parcial"; INVENT="$AMBIENTES/$destino.parcial.inventario"; carregar
     definir FLUXO_IMAGEM "$tag_rec"
     definir FLUXO_FLYWAY_ALVO current          # recuperação: Flyway só valida; nunca migra para a frente
 
@@ -479,7 +511,7 @@ cmd_restaurar() {
         echo "$antes"
     } > "$relatorio"
     grep -q '^auditoria_cadeia_problemas=0$' "$relatorio" || erro "cadeia de auditoria INVÁLIDA após a restauração (ver $relatorio)"
-    if diff <(grep -v -e '^projeto=' -e '^gerado_em=' -e '^imagem_' "$man") <(echo "$antes"); then
+    if diff <(grep -v -e '^projeto=' -e '^gerado_em=' -e '^imagem_' -e '^estado=' "$man") <(echo "$antes"); then
         echo "conferencia_manifesto=OK" >> "$relatorio"
     else
         echo "conferencia_manifesto=DIVERGENTE" >> "$relatorio"
@@ -510,13 +542,21 @@ cmd_restaurar() {
 
 cmd_atualizar() {
     carregar
-    local nova=""
+    local nova="" continuar=0
     while [ $# -gt 0 ]; do
         case "$1" in
             --imagem) nova="$2"; shift 2 ;;
+            --continuar-parcial) continuar=1; shift ;;
             *) erro "opção desconhecida: $1" ;;
         esac
     done
+    if [ "$continuar" = 1 ]; then
+        [ -f "$MARCA" ] || erro "não há atualização parcial pendente em '$PROJETO'; use 'atualizar' sem --continuar-parcial"
+        [ -n "$nova" ] || erro "informe a imagem corrigida: atualizar --imagem <imagem-corrigida> --continuar-parcial"
+        continuar_parcial "$nova"
+        return
+    fi
+    exigir_sem_parcial
     local anterior="${FLUXO_IMAGEM:?projeto sem imagem}" ts relatorio
     ts="$(date -u +%Y%m%dT%H%M%SZ)"
     relatorio="$AQUI/relatorios/atualizacao-$PROJETO-$ts.txt"
@@ -528,7 +568,11 @@ cmd_atualizar() {
     if [ -n "$nova" ]; then exigir_imagem "$nova"; else nova="$(cmd_construir --sem-ativar | tail -1)"; fi
     local antes vi_ant vi_nova
     antes="$(versoes_banco)"; vi_ant="$(versoes_imagem "$anterior")"; vi_nova="$(versoes_imagem "$nova")"
-    [ "$antes" = "$vi_ant" ] || erro "estado inicial inconsistente: banco [$antes] × imagem atual [$vi_ant]; nada foi alterado"
+    # Atualização NORMAL só parte de um estado coerente (esquema == imagem atual). Um avanço parcial
+    # registrado é recusado antes (exigir_sem_parcial) com o comando de correção para a frente.
+    [ "$antes" = "$vi_ant" ] || erro "estado inicial inconsistente: banco [$antes] × imagem atual [$vi_ant]; nada foi alterado.
+  Sem marca de avanço parcial registrada ($MARCA), não há como conferir o histórico aplicado:
+  análise manual ou restauração isolada de um backup (docs/operacao/homologacao.md §6–§7)"
     {
         echo "projeto=$PROJETO"; echo "inicio=$ts"; echo "backup_previo=$(basename "$bkp")"
         echo "imagem_anterior=$anterior ($(imagem_id "$anterior"))"; echo "imagem_nova=$nova ($(imagem_id "$nova"))"
@@ -568,6 +612,7 @@ cmd_atualizar() {
         echo "aplicacao=PARADA"
     } >> "$relatorio"
     chmod 600 "$relatorio"
+    registrar_parcial "$anterior" "$nova" "$antes" "$depois" "$bkp" "$relatorio"
     cat >&2 <<EOF
 ATUALIZAÇÃO FALHOU COM AVANÇO PARCIAL DO ESQUEMA.
   antes:  [$antes]
@@ -575,8 +620,8 @@ ATUALIZAÇÃO FALHOU COM AVANÇO PARCIAL DO ESQUEMA.
 A aplicação e o proxy ficam PARADOS: nenhuma imagem disponível é comprovadamente compatível com este
 esquema. NÃO volte para a imagem anterior: o Flyway a aceitaria (ignora migrações "futuras"),
 mas ela não conhece o esquema novo; por isso 'subir' a recusa pela verificação de compatibilidade. Escolha:
-  a) correção para a frente: nova imagem com as migrações corrigidas, então
-       bash $0 -p $PROJETO atualizar --imagem <nova-imagem-corrigida>
+  a) correção para a frente: imagem com as migrações JÁ APLICADAS idênticas e as demais corrigidas:
+       bash $0 -p $PROJETO atualizar --imagem <imagem-corrigida> --continuar-parcial
   b) restauração ISOLADA do backup feito antes da atualização, com a imagem registrada nele:
        bash $0 -p $PROJETO restaurar $bkp
      e, depois de conferir, promover o projeto recuperado (docs/operacao/homologacao.md §7).
@@ -585,11 +630,107 @@ EOF
     exit 3
 }
 
+# Guarda o estado parcial: marca (versões, imagens, backup prévio) e inventário das migrações já
+# aplicadas, com o arquivo e o SHA-256 de quem as aplicou (imagem anterior para as antigas; imagem que
+# falhou para as novas). É contra ESTE inventário que a imagem corretiva é conferida.
+registrar_parcial() {   # anterior falhou antes depois backup relatorio
+    local anterior="$1" falhou="$2" antes="$3" depois="$4" bkp="$5" rel="$6" novas
+    novas="$(comm -13 <(tr , '\n' <<<"$antes" | sort) <(tr , '\n' <<<"$depois" | sort) | paste -sd, -)"
+    ( umask 077
+      { inventario_imagem "$anterior" | filtrar_versoes "$antes"
+        inventario_imagem "$falhou" | filtrar_versoes "$novas"; } > "$INVENT"
+      {
+        echo "parcial_desde=$(date -u +%Y%m%dT%H%M%SZ)"
+        echo "imagem_anterior=$(imagem_id "$anterior")"
+        echo "imagem_que_falhou=$(imagem_id "$falhou")"
+        echo "migracoes_antes=$antes"
+        echo "migracoes_depois=$depois"
+        echo "backup_previo=$bkp"
+        echo "relatorio=$rel"
+      } > "$MARCA" )
+    [ "$(cut -d' ' -f3 "$INVENT" | sed -nE 's/^V([0-9]+)__.*/\1/p' | sort -n | paste -sd, -)" = "$depois" ] \
+        || erro "inventário do estado parcial incompleto ($INVENT); não prossiga sem análise manual"
+}
+
+# Correção para a frente a partir de um avanço parcial (atualizar --imagem C --continuar-parcial).
+continuar_parcial() {
+    local corr="$1" ts relatorio bkp_parcial
+    ts="$(date -u +%Y%m%dT%H%M%SZ)"
+    relatorio="$AQUI/relatorios/atualizacao-$PROJETO-$ts.txt"
+    mkdir -p "$AQUI/relatorios"
+    exigir_imagem "$corr"
+    # 1) Nada atende enquanto o banco está parcialmente migrado.
+    parar_atendimento
+    local antes vi_corr
+    antes="$(versoes_banco)"; vi_corr="$(versoes_imagem "$corr")"
+    [ "$antes" = "$(sed -n 's/^migracoes_depois=//p' "$MARCA")" ] \
+        || erro "o esquema mudou desde a falha registrada ([$antes]); análise manual necessária — nada foi alterado"
+    {
+        echo "projeto=$PROJETO"; echo "inicio=$ts"; echo "modo=CONTINUACAO_PARCIAL"
+        echo "backup_previo_original=$(basename "$(sed -n 's/^backup_previo=//p' "$MARCA")")"
+        echo "imagem_corretiva=$corr ($(imagem_id "$corr"))"
+        echo "migracoes_antes=$antes"; echo "migracoes_imagem_corretiva=$vi_corr"
+    } > "$relatorio"
+    # 2) Histórico e somas: cada migração já aplicada precisa existir na imagem corretiva com o MESMO
+    #    arquivo e o MESMO SHA-256 de quando foi aplicada. (O Flyway confere de novo o checksum dele.)
+    local divergencias
+    divergencias="$(comm -23 <(sort "$INVENT") <(inventario_imagem "$corr" | filtrar_versoes "$antes" | sort))"
+    if [ -n "$divergencias" ]; then
+        { echo "resultado=RECUSADA_HISTORICO_DIVERGENTE"; echo "aplicacao=PARADA"; } >> "$relatorio"
+        chmod 600 "$relatorio"
+        erro "a imagem corretiva NÃO contém, idênticas, as migrações já aplicadas:
+$divergencias
+Nada foi alterado; aplicação continua PARADA. Relatório: $relatorio"
+    fi
+    echo "historico_conferido=OK" >> "$relatorio"
+    # 3) Backup do ESTADO PARCIAL, separado (o backup anterior à atualização é preservado).
+    info "backup do estado parcial (o backup anterior à atualização defeituosa é preservado)"
+    bkp_parcial="$(cmd_backup --rotulo parcial | tail -1)"
+    echo "backup_estado_parcial=$(basename "$bkp_parcial")" >> "$relatorio"
+    # 4) Só as migrações pendentes, com a imagem corretiva.
+    info "migração separada com $corr (aplica só as pendentes)"
+    local rc=0 depois
+    FLUXO_IMAGEM="$corr" FLUXO_FLYWAY_ALVO=latest dc run --rm -T --no-deps migracao >&2 || rc=$?
+    depois="$(versoes_banco)"
+    { echo "migracao_codigo=$rc"; echo "migracoes_depois=$depois"; } >> "$relatorio"
+    if [ "$rc" = 0 ] && [ "$depois" = "$vi_corr" ]; then
+        # 5) Esquema completo e idêntico ao da imagem corretiva: ativa-a e só então volta a atender
+        #    (subir confere esquema × imagem, imagem em execução e saúde).
+        definir FLUXO_IMAGEM "$corr"
+        mv "$MARCA" "$AQUI/relatorios/parcial-resolvido-$PROJETO-$ts.txt"
+        rm -f "$INVENT"
+        echo "esquema=COMPLETO_E_IGUAL_AO_DA_IMAGEM_CORRETIVA" >> "$relatorio"
+        cmd_subir
+        echo "imagem_em_execucao=$(app_id_em_execucao)" >> "$relatorio"
+        echo "resultado=SUCESSO" >> "$relatorio"
+        chmod 600 "$relatorio"
+        info "correção para a frente concluída: $corr (relatório $relatorio)"
+        return 0
+    fi
+    if [ "$depois" = "$antes" ]; then
+        # Sem novo avanço: o ponto de partida JÁ era parcial, então não há imagem comprovadamente
+        # compatível para reativar (a anterior não conhece o esquema). Continua parado.
+        { echo "resultado=FALHA_SEM_NOVO_AVANCO"; echo "aplicacao=PARADA"; } >> "$relatorio"
+        chmod 600 "$relatorio"
+        echo "ERRO: correção falhou sem novo avanço; o banco continua parcial e a aplicação PARADA (nenhuma imagem é reativada). Relatório: $relatorio" >&2
+        exit 4
+    fi
+    # Novo avanço parcial: atualiza a marca/inventário com as migrações aplicadas pela imagem corretiva.
+    local novas
+    novas="$(comm -13 <(tr , '\n' <<<"$antes" | sort) <(tr , '\n' <<<"$depois" | sort) | paste -sd, -)"
+    ( umask 077; inventario_imagem "$corr" | filtrar_versoes "$novas" >> "$INVENT" )
+    sed -i "s|^migracoes_depois=.*|migracoes_depois=$depois|" "$MARCA"
+    { echo "resultado=FALHA_COM_NOVO_AVANCO_PARCIAL"; echo "aplicacao=PARADA"; } >> "$relatorio"
+    chmod 600 "$relatorio"
+    echo "Correção avançou parcialmente ([$antes] -> [$depois]); aplicação PARADA. Relatório: $relatorio" >&2
+    exit 3
+}
+
 cmd_remover() {
     carregar
     [ "${1:-}" = "--confirmo-apagar-dados" ] || erro "isto APAGA o banco do projeto '$PROJETO'. Confirme com: remover --confirmo-apagar-dados"
     dc down -v --remove-orphans
-    rm -rf "${FLUXO_SEGREDOS:?}" "$ENVF"
+    rm -rf "${FLUXO_SEGREDOS:?}" "$ENVF" "$MARCA" "$INVENT"   # o volume com o esquema parcial também foi apagado
     info "projeto '$PROJETO' removido (contêineres, volumes, segredos e configuração)"
 }
 
