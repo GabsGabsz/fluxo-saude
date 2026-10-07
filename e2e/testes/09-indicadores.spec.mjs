@@ -26,8 +26,10 @@ test('Direção: retrato, histórico com valor esperado, período vazio e dicion
 
   // Período só de hoje: o único encerramento do dia na Norte é o do cenário (180 min).
   const hoje = await page.getByLabel('Fim (inclusive)').inputValue();
+  const calcular = page.getByRole('button', { name: 'Calcular' });
+  await expect(calcular).toBeEnabled();                       // cálculo inicial concluído
   await page.getByLabel(/^Início/).fill(hoje);
-  await page.getByRole('button', { name: 'Calcular' }).click();
+  await Promise.all([page.waitForResponse((x) => x.url().includes('/api/indicadores?')), calcular.click()]);
   await expect(historico.locator('dt:text-is("Encerrados incluídos") + dd')).toHaveText('1');
   await expect(historico.locator('dt:text-is("Média") + dd')).toHaveText('3 h 00 min');
   await expect(historico.locator('dt:text-is("Mediana") + dd')).toHaveText('3 h 00 min');
@@ -54,7 +56,8 @@ test('Direção: retrato, histórico com valor esperado, período vazio e dicion
   // Período sem encerramentos: "sem dados", nunca zero na média
   await page.getByLabel(/^Início/).fill('2020-01-01');
   await page.getByLabel('Fim (inclusive)').fill('2020-01-02');
-  await page.getByRole('button', { name: 'Calcular' }).click();
+  await expect(calcular).toBeEnabled();
+  await Promise.all([page.waitForResponse((x) => x.url().includes('/api/indicadores?')), calcular.click()]);
   await expect(historico.locator('dt:text-is("Encerrados incluídos") + dd')).toHaveText('0');
   await expect(historico.locator('dt:text-is("Média") + dd')).toHaveText('sem dados');
 

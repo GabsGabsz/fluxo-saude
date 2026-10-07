@@ -31,7 +31,7 @@ SELECT teste.afirma(inicio = '2026-10-06 04:00:00+00', 'Manaus: 1 h a mais que F
 SELECT teste.ctx(:ENF, :A);
 SELECT (SELECT count(*) FROM fluxo.episodio) AS episodios_antes \gset
 INSERT INTO fluxo.paciente (id, unidade_id, nome)
-SELECT ('44444444-0000-0000-0000-00000000000' || n)::uuid, :A, 'Paciente Indicador ' || n FROM generate_series(1, 8) n;
+SELECT ('44444444-0000-0000-0000-00000000000' || n)::uuid, :A, 'Paciente Indicador ' || n FROM generate_series(1, 9) n;
 
 -- E1: alta em B+12h (720 min). Bloqueio inteiro ANTES do período (não entra em motivos).
 INSERT INTO fluxo.episodio (id, unidade_id, paciente_id, setor_id, entrada_em, etapa_id, etapa_desde)
@@ -127,6 +127,16 @@ UPDATE fluxo.episodio SET etapa_id = teste.etapa(:A, 'TRANSFERIDO'), etapa_desde
        desfecho = 'TRANSFERENCIA', encerrado_em = :'base'::timestamptz + interval '20 hours', versao = versao + 1
  WHERE id = '55555555-0000-0000-0000-000000000008';
 
+-- E9: ABERTO; aceite em B+11h SEM solicitação antes; solicitação em B+13h; novo aceite em B+15h.
+-- Solicitação -> aceite = 120 min (1ª solicitação -> 1º aceite seguinte); NÃO é "sem marco" (entrou no tempo).
+INSERT INTO fluxo.episodio (id, unidade_id, paciente_id, setor_id, entrada_em, etapa_id, etapa_desde)
+VALUES ('55555555-0000-0000-0000-000000000009', :A, '44444444-0000-0000-0000-000000000009', :S1,
+        :'base'::timestamptz + interval '10 hours', teste.etapa(:A, 'ACEITO'), :'base'::timestamptz + interval '15 hours');
+INSERT INTO fluxo.evento_episodio (id, unidade_id, episodio_id, tipo, ocorrido_em, dados) VALUES
+ (gen_random_uuid(), :A, '55555555-0000-0000-0000-000000000009', 'ETAPA_ALTERADA', :'base'::timestamptz + interval '11 hours', :AJ::jsonb || '{"de": "EM_ATENDIMENTO", "para": "ACEITO"}'),
+ (gen_random_uuid(), :A, '55555555-0000-0000-0000-000000000009', 'ETAPA_ALTERADA', :'base'::timestamptz + interval '13 hours', :AJ::jsonb || '{"de": "ACEITO", "para": "TRANSFERENCIA_SOLICITADA"}'),
+ (gen_random_uuid(), :A, '55555555-0000-0000-0000-000000000009', 'ETAPA_ALTERADA', :'base'::timestamptz + interval '15 hours', :AJ::jsonb || '{"de": "TRANSFERENCIA_SOLICITADA", "para": "ACEITO"}');
+
 -- Regras (administrador): só TEMPO_TOTAL ativa e sem etapa entra no "acima do limite".
 SELECT teste.ctx(:ADM_A, :A);
 INSERT INTO fluxo.regra_alerta (id, unidade_id, nome, tipo, limite) VALUES
@@ -184,8 +194,9 @@ SELECT teste.afirma(jsonb_object_agg(desfecho, quantidade) = '{"ALTA": 2, "TRANS
                     'desfechos: 2 altas, 3 transferências, 1 administrativo')
   FROM fluxo.ind_desfechos(:A, :'p_ini', :'p_fim', NULL);
 
--- I-05: 1ª solicitação (B+2h) -> 1º aceite seguinte (B+11h) = 540 min; E7 sem solicitação = dado ausente.
-SELECT teste.afirma(incluidos = 1 AND sem_marco = 1 AND media_min = 540 AND mediana_min = 540,
+-- I-05: E4 1ª solicitação (B+2h) -> 1º aceite seguinte (B+11h) = 540 min; E9 (B+13h -> B+15h) = 120 min;
+-- E7 sem solicitação = dado ausente. E9 não é contado duas vezes (já entrou no tempo).
+SELECT teste.afirma(incluidos = 2 AND sem_marco = 1 AND media_min = 330 AND mediana_min = 330,
                     format('solicitação->aceite (obtido %s/%s/%s)', incluidos, sem_marco, media_min))
   FROM fluxo.ind_solicitacao_aceite(:A, :'p_ini', :'p_fim', NULL);
 

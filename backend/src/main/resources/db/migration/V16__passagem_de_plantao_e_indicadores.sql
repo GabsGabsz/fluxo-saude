@@ -324,7 +324,9 @@ AS $$
     dur AS (SELECT extract(epoch FROM aceite_em - sol_em) / 60.0 AS minutos FROM pares
              WHERE sol_em IS NOT NULL AND aceite_em >= p_inicio AND aceite_em < p_fim)
     SELECT (SELECT count(*) FROM dur),
-           (SELECT count(*) FROM pares WHERE sol_em IS NULL OR sol_em > primeiro_aceite_no_periodo),
+           -- dado ausente: aceite no período sem solicitação antes dele, e que não entrou no tempo acima
+           (SELECT count(*) FROM pares WHERE (sol_em IS NULL OR sol_em > primeiro_aceite_no_periodo)
+                                          AND NOT (sol_em IS NOT NULL AND aceite_em >= p_inicio AND aceite_em < p_fim)),
            (SELECT avg(minutos) FROM dur),
            (SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY minutos) FROM dur)
 $$;
@@ -368,7 +370,7 @@ CREATE FUNCTION fluxo.ind_motivos(p_unidade uuid, p_inicio timestamptz, p_fim ti
     SET search_path = pg_catalog
 AS $$
     WITH eps AS (
-        SELECT e.id, e.encerrado_em
+        SELECT e.id, e.encerrado_em, e.entrada_em
           FROM fluxo.episodio e
          WHERE e.unidade_id = p_unidade
            AND e.entrada_em < p_fim
@@ -382,6 +384,8 @@ AS $$
           JOIN eps ON eps.id = ev.episodio_id
          WHERE ev.unidade_id = p_unidade AND ev.tipo IN ('BLOQUEIO_DEFINIDO', 'BLOQUEIO_REMOVIDO')
            AND ev.ocorrido_em < p_fim
+           -- nenhum evento antecede a entrada do episódio: limita a varredura do índice
+           AND ev.ocorrido_em >= (SELECT min(x.entrada_em) FROM eps x)
     ),
     seg AS (
         SELECT episodio_id, tipo, motivo, ocorrido_em AS ini,

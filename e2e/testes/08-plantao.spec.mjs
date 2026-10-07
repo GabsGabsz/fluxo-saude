@@ -106,9 +106,12 @@ test('quem entregou não confirma o próprio recebimento; pode cancelar com just
   await api.fechar();
 });
 
+// Depende do teste anterior ter cancelado a passagem (sem pendente, a tela mostra "Preparar passagem").
 test('permissões, troca de unidade e sessão revogada na tela de plantão', async ({ page, baseURL }) => {
   // Perfis sem PLANTAO_GERENCIAR
   await entrar(page, 'direcao.e2e');
+  await expect(page.getByRole('heading', { name: 'Painel coletivo' })).toBeVisible();   // menu já desenhado
+  await expect(page.getByRole('navigation', { name: 'Telas' })).toContainText('Indicadores');
   await expect(page.getByRole('navigation', { name: 'Telas' })).not.toContainText('Passagem de plantão');
   await page.goto('/#/plantao');
   await expect(page.getByRole('heading', { name: 'Acesso não permitido' })).toBeVisible();

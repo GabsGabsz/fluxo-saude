@@ -148,8 +148,17 @@ class ComposicaoPassagemTest {
         assertEquals(List.of(id(11)), d.pendenciasAlteradas(), "vencimento é alteração relevante");
         assertEquals(Integer.valueOf(1), d.contagens().get("casosEncerrados"));
 
-        String s1 = d.assinaturaRecebimento(entregue.assinatura());
-        assertNotEquals(s1, nenhuma.assinaturaRecebimento(entregue.assinatura()),
+        ConteudoPassagem atual = ComposicaoPassagem.compor(atuais, List.of(), AGORA.plusSeconds(601));
+        String s1 = d.assinaturaRecebimento(entregue.assinatura(), atual.assinatura());
+        assertNotEquals(s1, nenhuma.assinaturaRecebimento(entregue.assinatura(), entregue.assinatura()),
                 "o recebimento assina também as diferenças vistas");
+        // Caso NOVO muda de novo (mesma lista de ids nas diferenças): a assinatura também muda.
+        List<CasoAtual> atuaisDepois = List.of(atuais.get(0), atuais.get(1),
+                caso(4, 1, NaturezaEtapa.ESPERA, false, false, List.of()));
+        ConteudoPassagem atual2 = ComposicaoPassagem.compor(atuaisDepois, List.of(), AGORA.plusSeconds(601));
+        Diferencas d2 = Diferencas.entre(entregue, atual2);
+        assertEquals(d.canonico(), d2.canonico(), "mesmos ids nas diferenças");
+        assertNotEquals(s1, d2.assinaturaRecebimento(entregue.assinatura(), atual2.assinatura()),
+                "o estado atual exibido também é assinado");
     }
 }

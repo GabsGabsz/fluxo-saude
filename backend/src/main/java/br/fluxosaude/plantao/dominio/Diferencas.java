@@ -80,10 +80,15 @@ public record Diferencas(List<UUID> casosEncerrados, List<UUID> casosNovos, List
         return m;
     }
 
-    /** Assinatura do que o recebedor viu: conteúdo entregue + estas diferenças. */
-    public String assinaturaRecebimento(String assinaturaEntregue) {
+    /**
+     * Assinatura do que o recebedor viu: conteúdo entregue + estas diferenças + o conteúdo ATUAL
+     * (os casos e pendências novos ou alterados são exibidos com o estado atual: se mudarem de novo
+     * antes do clique, a assinatura muda e o recebimento é recusado).
+     */
+    public String assinaturaRecebimento(String assinaturaEntregue, String assinaturaAtual) {
         Objects.requireNonNull(assinaturaEntregue);
-        return Assinatura.de("recebimento:v1|" + assinaturaEntregue + "|" + canonico());
+        Objects.requireNonNull(assinaturaAtual);
+        return Assinatura.de("recebimento:v2|" + assinaturaEntregue + "|" + canonico() + "|" + assinaturaAtual);
     }
 
     public String canonico() {

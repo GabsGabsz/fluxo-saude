@@ -137,6 +137,12 @@ public class TratadorDeErros {
             return resposta(HttpStatus.CONFLICT, "CONFLITO_DE_VERSAO",
                     "O registro foi alterado por outra pessoa. Recarregue e tente novamente.", req);
         }
+        if (e instanceof DataAccessException dae && "57014".equals(sqlState(dae))) {
+            // statement_timeout: consulta pesada demais (ex.: indicadores de um período longo).
+            LOG.warn("consulta cancelada por tempo (SQLSTATE 57014)");
+            return resposta(HttpStatus.SERVICE_UNAVAILABLE, "CONSULTA_DEMORADA",
+                    "A consulta demorou demais. Reduza o período ou filtre por setor e tente novamente.", req);
+        }
         if (e instanceof DataAccessException dae && "55000".equals(sqlState(dae))) {
             // object_not_in_prerequisite_state: gatilho recusou mudança de estado (ex.: pendência
             // já encerrada, campo imutável). Estado mudou sob o cliente → recarregar.

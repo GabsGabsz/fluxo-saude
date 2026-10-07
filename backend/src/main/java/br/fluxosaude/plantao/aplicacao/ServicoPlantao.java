@@ -112,7 +112,7 @@ public final class ServicoPlantao {
             }
             ConteudoPassagem atual = compor(r, agora);
             Diferencas d = Diferencas.entre(entregue, atual);
-            return new Detalhe(agora, p, entregue, integra, d, d.assinaturaRecebimento(p.assinatura()), atual,
+            return new Detalhe(agora, p, entregue, integra, d, d.assinaturaRecebimento(p.assinatura(), atual.assinatura()), atual,
                     nomes(r, List.of(entregue, atual)));
         });
     }
@@ -132,8 +132,9 @@ public final class ServicoPlantao {
             ConteudoPassagem entregue = r.conteudo(id).orElseThrow(() -> new RecursoNaoEncontradoException("Passagem"));
             RegraVioladaException.exigir(entregue.assinatura().equals(p.assinatura()), "PASSAGEM_INTEGRIDADE",
                     "O conteúdo gravado não confere com a assinatura da entrega.");
-            Diferencas d = Diferencas.entre(entregue, compor(r, relogio.instant()));
-            if (!d.assinaturaRecebimento(p.assinatura()).equals(assinaturaVista)) {
+            ConteudoPassagem atual = compor(r, relogio.instant());
+            Diferencas d = Diferencas.entre(entregue, atual);
+            if (!d.assinaturaRecebimento(p.assinatura(), atual.assinatura()).equals(assinaturaVista)) {
                 throw new ConflitoDeEstadoException("RECEBIMENTO_DESATUALIZADO",
                         "A situação mudou desde que você abriu a passagem. Nada foi confirmado: "
                         + "recarregue, confira as diferenças e confirme novamente.");

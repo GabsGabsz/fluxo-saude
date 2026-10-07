@@ -308,7 +308,7 @@ final class RepositorioPlantaoJdbc implements RepositorioPlantao {
 
     @Override
     public void auditar(String acao, UUID passagemId, Map<String, Object> dados) {
-        jdbc.sql("SELECT auditoria.registrar(?, 'fluxo.passagem_plantao', ?, CAST(? AS jsonb))")
+        jdbc.sql("SELECT auditoria.registrar(?, 'fluxo.passagem_plantao', ?, CAST(? AS jsonb), (fluxo.ctx_unidades())[1])")
             .param(acao).param(passagemId.toString()).param(json(dados))
             .query(Long.class).single();
     }

@@ -175,7 +175,8 @@ class IndicadoresIT extends IntegracaoBase {
 
         // Validação de período e permissões
         exigir(422, direcao.enviar("GET", "/api/indicadores?inicio=" + hoje + "&fim=" + hoje.minusDays(1), null));
-        exigir(422, direcao.enviar("GET", "/api/indicadores?inicio=" + hoje + "&fim=" + hoje.plusDays(1), null));
+        // +2 dias: futuro qualquer que seja o fuso do relógio do teste perto da meia-noite
+        exigir(422, direcao.enviar("GET", "/api/indicadores?inicio=" + hoje + "&fim=" + hoje.plusDays(2), null));
         exigir(422, direcao.enviar("GET", "/api/indicadores?inicio=" + hoje.minusDays(400) + "&fim=" + hoje, null));
         exigir(400, direcao.enviar("GET", "/api/indicadores", null));
         exigir(403, cliente("enf.ind").enviar("GET", "/api/indicadores?" + periodo, null));

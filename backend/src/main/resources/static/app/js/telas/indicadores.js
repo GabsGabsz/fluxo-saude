@@ -34,7 +34,7 @@ export function montar(raiz, ctx) {
   } },
   h('div', { class: 'linha' },
     campo(`Início (data local da unidade)`, inicio), campo('Fim (inclusive)', fim), campo('Setor', setor)),
-  h('div', { class: 'acoes' }, h('button', { type: 'submit' }, 'Calcular')));
+  h('div', { class: 'acoes' }, h('button', { type: 'submit', id: 'calcular-indicadores' }, 'Calcular')));
 
   substituir(raiz,
     h('h1', {}, 'Indicadores'),
@@ -43,9 +43,12 @@ export function montar(raiz, ctx) {
     form, situacao, resultado, dicionario);
 
   let calculando = false;
+  const botaoCalcular = form.querySelector('button[type="submit"]');
   async function calcular() {
-    if (calculando) return;
+    if (calculando) return; // o botão fica desabilitado durante o cálculo (nada é descartado em silêncio)
     calculando = true;
+    botaoCalcular.disabled = true;
+    form.setAttribute('aria-busy', 'true');
     substituir(situacao, carregando('Calculando…'));
     try {
       const q = new URLSearchParams({ inicio: inicio.value, fim: fim.value });
@@ -62,6 +65,8 @@ export function montar(raiz, ctx) {
       substituir(resultado);
     } finally {
       calculando = false;
+      botaoCalcular.disabled = false;
+      form.removeAttribute('aria-busy');
     }
   }
 

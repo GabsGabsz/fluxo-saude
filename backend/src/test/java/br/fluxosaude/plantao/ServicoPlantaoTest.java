@@ -270,6 +270,17 @@ class ServicoPlantaoTest {
     }
 
     @Test
+    void casoNovoAlteradoDepoisDeAbertoTambemExigeNovaLeitura() {
+        UUID id = servico.entregar(enf, ORIGEM, servico.previa(enf, ORIGEM).assinatura(), null);
+        banco.casos.add(caso(3, 0, List.of()));                           // caso novo após a entrega
+        ServicoPlantao.Detalhe d = servico.obter(medico, ORIGEM, id);
+        assertEquals(List.of(new UUID(0, 3)), d.diferencas().casosNovos());
+        banco.casos.set(2, caso(3, 1, List.of()));                        // o caso novo muda de novo
+        assertEquals("RECEBIMENTO_DESATUALIZADO", assertThrows(ConflitoDeEstadoException.class,
+                () -> servico.receber(medico, ORIGEM, id, 0, d.assinaturaRecebimento())).codigo());
+    }
+
+    @Test
     void quemEntregouNaoRecebeEOutrasRegras() {
         String ass = servico.previa(enf, ORIGEM).assinatura();
         UUID id = servico.entregar(enf, ORIGEM, ass, null);

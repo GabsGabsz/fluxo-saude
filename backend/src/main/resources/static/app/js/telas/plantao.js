@@ -285,6 +285,6 @@ export function montar(raiz, ctx, { id }) {
   carregar();
   return {
     desmontar() { ativo = false; },
-    emEdicao: () => !concluido && formularios.some((f) => f.sujo()),
+    emEdicao: () => !concluido && (formularios.some((f) => f.sujo()) || (!id && observacaoDigitada.trim() !== '')),
   };
 }
