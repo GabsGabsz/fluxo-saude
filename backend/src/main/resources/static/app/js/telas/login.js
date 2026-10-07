@@ -15,7 +15,7 @@ export function montar(raiz, ctx, { aviso, aoEntrar }) {
     campos: [campo('Usuário', login), campo('Senha', senha)],
     enviar: async () => {
       const sessao = await ctx.api.criar('/api/sessao', { login: login.value.trim(), senha: senha.value },
-        { login: true, semGeracao: true });
+        { login: true });
       senha.value = '';
       await aoEntrar(sessao);
     },

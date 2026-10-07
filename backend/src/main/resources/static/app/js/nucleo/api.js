@@ -1,7 +1,8 @@
 // Cliente HTTP da interface: mesma origem, sessão no servidor (cookie HttpOnly), CSRF no
 // modo SPA do Spring Security (cookie XSRF-TOKEN -> cabeçalho X-XSRF-TOKEN). Nunca guarda
-// credencial: nada em localStorage/sessionStorage. Respostas de uma "geração" anterior
-// (antes de sair, trocar de unidade ou ter a sessão revogada) são descartadas.
+// credencial: nada em localStorage/sessionStorage. Operações de um contexto anterior (antes de
+// sair, trocar de unidade ou ter a sessão revogada) não são enviadas, e respostas dele são
+// descartadas (ver executar()).
 
 /** Erro de API com o corpo problem+json do servidor (codigo, detail, correlacao). */
 export class ErroApi extends Error {
@@ -24,70 +25,131 @@ export class ErroConexao extends Error {
   constructor(causa) { super('Sem conexão com o servidor'); this.name = 'ErroConexao'; this.causa = causa; }
 }
 
-/** Resposta descartada por pertencer a uma geração anterior da sessão/unidade. */
+/**
+ * Resposta descartada por pertencer a um contexto anterior (sessão/unidade mudou). Com
+ * {@code enviada === false}, a operação NEM CHEGOU a ser enviada ao servidor.
+ */
 export class RespostaDescartada extends Error {
-  constructor() { super('Resposta descartada (sessão ou unidade mudou)'); this.name = 'RespostaDescartada'; }
+  constructor(enviada = true) {
+    super(enviada ? 'Resposta descartada (sessão ou unidade mudou)'
+      : 'Operação não enviada: a sessão ou a unidade mudou antes do envio');
+    this.name = 'RespostaDescartada';
+    this.enviada = enviada;
+  }
 }
 
 const METODOS_SEGUROS = new Set(['GET', 'HEAD']);
+const OPCOES_FETCH = { credentials: 'same-origin', cache: 'no-store', redirect: 'error' };
 
 /**
+ * Toda operação pertence ao CONTEXTO (geração + unidade exibida) em que foi iniciada:
+ *  - o contexto é capturado na entrada e nunca trocado pelo atual (o cabeçalho X-Fluxo-Unidade é
+ *    sempre o da unidade em que a operação foi preparada);
+ *  - é conferido de novo depois de obter o token CSRF e imediatamente antes do envio: se mudou,
+ *    a operação NÃO é enviada (RespostaDescartada com enviada = false);
+ *  - é conferido depois dos cabeçalhos e depois do corpo da resposta: resposta de contexto
+ *    anterior (inclusive 401/409) é descartada e não aciona os tratadores globais.
+ * Não há exceção genérica a essa regra. Só duas operações não pertencem a um contexto, e por
+ * isso têm métodos próprios: obter o token CSRF (não traz dado) e encerrar a sessão (sair vale
+ * para qualquer unidade).
+ *
  * @param {object} deps fetch, lerCookie(nome), geracao() -> número atual, aoEncerrarSessao(erro),
- *   unidadeEsperada() -> id da unidade exibida (enviada em X-Fluxo-Unidade; o servidor recusa com
- *   409 UNIDADE_ATIVA_ALTERADA se outra aba trocou a unidade), aoMudarUnidade(erro)
+ *   unidadeEsperada() -> id da unidade exibida (o servidor recusa com 409 UNIDADE_ATIVA_ALTERADA se
+ *   a unidade da sessão for outra, ex.: trocada em outra aba), aoMudarUnidade(erro)
  */
 export function criarApi({ fetch, lerCookie, geracao, aoEncerrarSessao = () => {}, unidadeEsperada = () => null,
   aoMudarUnidade = () => {} }) {
+  /** Busca o token CSRF (cookie XSRF-TOKEN) se ainda não houver. Não lê nem altera contexto. */
   async function garantirCsrf() {
-    if (!lerCookie('XSRF-TOKEN')) {
-      await executar('GET', '/api/sessao/csrf', undefined, { semGeracao: true });
+    if (lerCookie('XSRF-TOKEN')) return;
+    let r;
+    try {
+      r = await fetch('/api/sessao/csrf', { method: 'GET', headers: { Accept: 'application/json' }, ...OPCOES_FETCH });
+    } catch (e) {
+      throw new ErroConexao(e);
     }
+    if (!r.ok) throw new ErroApi(r.status, null);
   }
 
   async function executar(metodo, caminho, corpo, opcoes = {}) {
     if (typeof caminho !== 'string' || !caminho.startsWith('/api/')) {
       throw new Error('caminho de API inválido');
     }
-    const geracaoInicial = geracao();
-    if (!METODOS_SEGUROS.has(metodo)) {
-      await garantirCsrf();
+    // Contexto da operação: capturado UMA vez, na entrada.
+    const contexto = { geracao: geracao(), unidade: unidadeEsperada() || null };
+    const vigente = () => geracao() === contexto.geracao && (unidadeEsperada() || null) === contexto.unidade;
+    const corpoJson = corpo === undefined ? undefined : JSON.stringify(corpo); // preparado no contexto de origem
+
+    const seguro = METODOS_SEGUROS.has(metodo);
+    if (!seguro) {
+      try {
+        await garantirCsrf();
+      } catch (e) {
+        if (!vigente()) throw new RespostaDescartada(false); // falhou, mas o contexto já é outro
+        throw e;
+      }
+      if (!vigente()) throw new RespostaDescartada(false); // mudou enquanto esperava o token
     }
     const cabecalhos = { Accept: 'application/json' };
-    const unidade = unidadeEsperada();
-    if (unidade) cabecalhos['X-Fluxo-Unidade'] = unidade;
-    if (corpo !== undefined) cabecalhos['Content-Type'] = 'application/json';
-    const token = lerCookie('XSRF-TOKEN');
-    if (!METODOS_SEGUROS.has(metodo) && token) cabecalhos['X-XSRF-TOKEN'] = token;
+    if (contexto.unidade) cabecalhos['X-Fluxo-Unidade'] = contexto.unidade;
+    if (corpoJson !== undefined) cabecalhos['Content-Type'] = 'application/json';
+    if (!seguro) {
+      const token = lerCookie('XSRF-TOKEN');
+      if (token) cabecalhos['X-XSRF-TOKEN'] = token;
+    }
+    // Última conferência, sem nenhum await entre ela e o envio.
+    if (!vigente()) throw new RespostaDescartada(false);
     let resposta;
     try {
       resposta = await fetch(caminho, {
-        method: metodo,
-        headers: cabecalhos,
-        body: corpo === undefined ? undefined : JSON.stringify(corpo),
-        credentials: 'same-origin',
-        cache: 'no-store',
-        redirect: 'error',
-        signal: opcoes.signal,
+        method: metodo, headers: cabecalhos, body: corpoJson, signal: opcoes.signal, ...OPCOES_FETCH,
       });
     } catch (e) {
       if (e && e.name === 'AbortError') throw e;
+      if (!vigente()) throw new RespostaDescartada();
       throw new ErroConexao(e);
     }
-    if (!opcoes.semGeracao && geracao() !== geracaoInicial) {
-      throw new RespostaDescartada();
+    if (!vigente()) { descartarCorpo(resposta); throw new RespostaDescartada(); } // cabeçalhos tardios
+    let texto = '';
+    if (resposta.status !== 204) {
+      try {
+        texto = await resposta.text();
+      } catch (e) {
+        if (!vigente()) throw new RespostaDescartada();
+        throw new ErroConexao(e);
+      }
     }
-    const texto = resposta.status === 204 ? '' : await resposta.text();
+    if (!vigente()) throw new RespostaDescartada(); // corpo terminou de chegar depois da mudança
     let dados = null;
     if (texto) {
       try { dados = JSON.parse(texto); } catch { dados = null; }
     }
     if (!resposta.ok) {
       const erro = new ErroApi(resposta.status, dados);
+      // Só respostas do contexto VIGENTE chegam aqui: uma 401/409 antiga nunca mexe no contexto novo.
       if (erro.sessaoEncerrada && !opcoes.login) aoEncerrarSessao(erro);
       if (erro.unidadeAlterada) aoMudarUnidade(erro);
       throw erro;
     }
     return { status: resposta.status, dados };
+  }
+
+  /**
+   * Sair: encerra a sessão do servidor qualquer que seja o contexto (não envia unidade, não
+   * aciona tratadores globais). 401 = já estava encerrada.
+   */
+  async function encerrarSessao() {
+    await garantirCsrf();
+    const token = lerCookie('XSRF-TOKEN');
+    let r;
+    try {
+      r = await fetch('/api/sessao', { method: 'DELETE',
+        headers: token ? { Accept: 'application/json', 'X-XSRF-TOKEN': token } : { Accept: 'application/json' },
+        ...OPCOES_FETCH });
+    } catch (e) {
+      throw new ErroConexao(e);
+    }
+    if (!r.ok && r.status !== 401) throw new ErroApi(r.status, null);
   }
 
   const json = (metodo) => async (caminho, corpo, opcoes) => (await executar(metodo, caminho, corpo, opcoes)).dados;
@@ -98,9 +160,12 @@ export function criarApi({ fetch, lerCookie, geracao, aoEncerrarSessao = () => {
     substituir: json('PUT'),
     alterar: json('PATCH'),
     remover: json('DELETE'),
-    /** Força um token CSRF novo (após login e troca de senha o servidor rotaciona o token). */
-    async renovarCsrf() { await executar('GET', '/api/sessao/csrf', undefined, { semGeracao: true }); },
+    encerrarSessao,
   };
+}
+
+function descartarCorpo(resposta) {
+  try { if (resposta.body && resposta.body.cancel) resposta.body.cancel().catch(() => {}); } catch { /* ignora */ }
 }
 
 /** Monta query string só com valores preenchidos. */

@@ -2,7 +2,7 @@
 // conforme as permissões. Toda decisão de acesso é REFEITA no servidor; o menu só evita mostrar
 // o que o perfil não pode usar.
 
-import { criarApi, mensagemDeErro, ErroApi } from './nucleo/api.js';
+import { criarApi, mensagemDeErro, ErroApi, RespostaDescartada } from './nucleo/api.js';
 import { criarEstado, telasPermitidas } from './nucleo/estado.js';
 import { criarRelogio, formatarDuracao, decorrido, formatarHora } from './nucleo/tempo.js';
 import { h, substituir, mensagem, carregando, opcoes } from './nucleo/dom.js';
@@ -41,6 +41,8 @@ let avisoLogin = null;         // mensagem a exibir na tela de login (sessão en
 let ultimaAtualizacaoOk = null;
 let avisoPosRender = null;     // aviso exibido no topo da próxima tela montada
 let trocandoUnidade = false;
+let saindo = false;
+let catalogoDivergente = 0;    // catálogos seguidos de outra unidade (evita recarga sem fim)
 
 function lerCookie(nome) {
   for (const parte of document.cookie.split(';')) {
@@ -168,16 +170,21 @@ function encerrarLocalmente(texto) {
 async function sair() {
   if (telaAtual && telaAtual.emEdicao && telaAtual.emEdicao()
     && !window.confirm('Há alterações não enviadas nesta tela. Sair mesmo assim?')) return;
+  if (saindo) return;
+  saindo = true;
   desmontar();
+  estado.invalidar(); // nada em voo (ex.: escrita esperando o token CSRF) é enviado ou aplicado
   substituir(principal, carregando('Saindo…'));
   let texto = 'Você saiu do sistema.';
   try {
-    await api.remover('/api/sessao', undefined, { semGeracao: true });
+    await api.encerrarSessao(); // vale para qualquer contexto; não aciona tratadores globais
   } catch (e) {
-    if (!(e instanceof ErroApi && e.status === 401)) {
+    if (e) {
       texto = 'Não foi possível confirmar a saída no servidor. Os dados foram apagados desta tela; '
         + 'se estiver em computador compartilhado, feche o navegador.';
     }
+  } finally {
+    saindo = false;
   }
   estado.limpar();
   avisarOutrasAbas();
@@ -188,10 +195,27 @@ async function sair() {
 }
 
 async function carregarContexto() {
+  const geracaoInicial = estado.geracao();
+  const unidadeInicial = estado.sessao() ? estado.sessao().unidadeAtiva : null;
   const [catalogo, unidades] = await Promise.all([
     api.obter('/api/catalogo'),
     api.obter('/api/sessao/unidades'),
   ]);
+  // Só grava no estado global se o contexto ainda é o mesmo E o catálogo é da unidade exibida.
+  const sessao = estado.sessao();
+  if (estado.geracao() !== geracaoInicial || !sessao || sessao.unidadeAtiva !== unidadeInicial) {
+    throw new RespostaDescartada();
+  }
+  if (!catalogo || !catalogo.unidade || catalogo.unidade.id !== unidadeInicial) {
+    // Defesa adicional: catálogo de outra unidade nunca é aceito como o da unidade exibida.
+    catalogoDivergente += 1;
+    if (catalogoDivergente > 1) {
+      throw new ErroApi(500, { detail: 'O servidor devolveu dados de outra unidade. Saia e entre novamente.' });
+    }
+    contextoMudou('A unidade ativa mudou durante o carregamento. A tela foi recarregada.');
+    throw new RespostaDescartada();
+  }
+  catalogoDivergente = 0;
   estado.definirUnidades(unidades);
   estado.definirCatalogo(catalogo);
 }
@@ -225,8 +249,10 @@ async function trocarUnidade(unidadeId) {
     ctx.anunciar('Unidade ativa alterada.');
   } catch (e) {
     trocandoUnidade = false;
-    if (e && e.name === 'RespostaDescartada') return;
-    if (e instanceof ErroApi && e.status === 401) return;
+    // Outra mudança de contexto aconteceu durante a troca: mostra o estado real do servidor.
+    if (e && e.name === 'RespostaDescartada') { await recarregarSessao(); return; }
+    // Sessão encerrada durante a troca: o estado já foi limpo; mostra o login.
+    if (e instanceof ErroApi && e.status === 401) { await renderizar(); return; }
     avisoPosRender = `Não foi possível trocar de unidade: ${mensagemDeErro(e)}`;
     await recarregarSessao();
   } finally {
@@ -290,6 +316,9 @@ function irPara(rota) {
 
 let renderizando = 0;
 async function renderizar() {
+  // Durante a troca de unidade ou a saída, nenhuma tela é montada (nem por clique no menu):
+  // o próprio fluxo renderiza ao terminar, já no contexto novo.
+  if (trocandoUnidade || saindo) return;
   const minha = ++renderizando;
   desmontar();
   faixa.hidden = true; // a faixa de "desatualizado" é da tela anterior
@@ -319,7 +348,7 @@ async function renderizar() {
       await carregarContexto();
     } catch (e) {
       if (minha !== renderizando || (e && e.name === 'RespostaDescartada')) return;
-      if (ctx.tratarErroGlobal(e) || (e instanceof ErroApi && e.status === 401)) return;
+      if (ctx.tratarErroGlobal(e) || (e instanceof ErroApi && (e.status === 401 || e.unidadeAlterada))) return;
       substituir(principal, mensagem('erro', `Não foi possível carregar os dados da unidade: ${mensagemDeErro(e)}`),
         h('button', { type: 'button', aoClicar: () => renderizar() }, 'Tentar novamente'));
       return;

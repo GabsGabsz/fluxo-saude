@@ -41,8 +41,9 @@ export function montar(raiz, ctx, { obrigatoria = false } = {}) {
     form.el,
     obrigatoria ? h('div', { class: 'acoes' }, h('button', { type: 'button', class: 'botao-secundario',
       aoClicar: async () => {
-        try { await ctx.api.remover('/api/sessao', undefined, { semGeracao: true }); } catch { /* segue */ }
+        try { await ctx.api.encerrarSessao(); } catch { /* segue: o estado local é limpo de qualquer forma */ }
         ctx.estado.limpar();
+        ctx.avisarOutrasAbas();
         ctx.recarregarSessao();
       } }, 'Sair sem trocar')) : null));
   return { desmontar: limpar, emEdicao: () => form.sujo() };
