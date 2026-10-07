@@ -87,7 +87,7 @@ SELECT count(*) FROM fluxo.rel_gargalos('00000000-0000-0000-0000-00000000000a', 
        (SELECT id FROM fluxo.setor WHERE unidade_id = '00000000-0000-0000-0000-00000000000a'),
        (SELECT id FROM fluxo.etapa WHERE unidade_id = '00000000-0000-0000-0000-00000000000a' AND codigo = 'TRANSFERENCIA_SOLICITADA'), NULL);
 SELECT count(*) FROM fluxo.rel_resumo('00000000-0000-0000-0000-00000000000a', now() - interval '366 days', now(), now(), NULL);
-\echo -- 366 dias, qualidade sem e com filtro de setor (V20: setor do fato pela linha do tempo; inícios normalizados)
+\echo -- 366 dias, qualidade sem e com filtro de setor (V20/V21: setor do fato pela linha do tempo; inícios normalizados)
 SELECT count(*) FROM fluxo.rel_qualidade('00000000-0000-0000-0000-00000000000a', now() - interval '366 days', now(), now(), NULL);
 SELECT count(*) FROM fluxo.rel_qualidade('00000000-0000-0000-0000-00000000000a', now() - interval '366 days', now(), now(),
        (SELECT id FROM fluxo.setor WHERE unidade_id = '00000000-0000-0000-0000-00000000000a'));
