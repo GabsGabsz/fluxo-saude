@@ -41,7 +41,7 @@ jobs:
           backend/src/test/sql/run-db-tests.sh 2>&1 | tee testes-sql.log
       - name: Guardar relatório SQL
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: testes-sql
           path: testes-sql.log
@@ -67,7 +67,7 @@ jobs:
         run: mvn -B -ntp verify
       - name: Guardar relatórios JUnit
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: testes-java
           path: |
@@ -147,7 +147,7 @@ jobs:
         run: kill "$(cat e2e/aplicacao/aplicacao.pid)" 2>/dev/null || true
       - name: Guardar relatório, capturas de tela e log da aplicação
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: e2e-interface
           path: |
